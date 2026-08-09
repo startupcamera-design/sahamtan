@@ -1,11 +1,13 @@
 // src/services/portfolioService.ts
 import { supabase } from '../lib/supabase';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_SECRET;
 
-// Menggunakan Fallback Chain Gemini Models
+// DAFTAR MODEL GEMINI BERDASARKAN PRIORITAS (Fallback Chain)
 const PORTFOLIO_GEMINI_MODELS = [
-  'gemini-3.5-flash-lite'
+  'gemini-3.6-flash', // Model Utama (Ringan & Cepat)
+  'gemini-3.5-flash',      // Cadangan Utama
+  'gemini-3.0-flash',      // Cadangan Akses Cepat
 ];
 
 export interface PortfolioItem {
@@ -49,6 +51,8 @@ async function callPortfolioGemini(prompt: string): Promise<string> {
 
   for (const model of PORTFOLIO_GEMINI_MODELS) {
     try {
+      console.log(`🤖 Evaluasi Portofolio menggunakan model: ${model}...`);
+      
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
@@ -69,6 +73,7 @@ async function callPortfolioGemini(prompt: string): Promise<string> {
       const json = await response.json();
       if (!response.ok) {
         lastError = json.error?.message || response.statusText;
+        console.warn(`⚠️ Model ${model} gagal (${response.status}): ${lastError}`);
         continue;
       }
 
@@ -76,10 +81,11 @@ async function callPortfolioGemini(prompt: string): Promise<string> {
       if (text) return text;
     } catch (err: any) {
       lastError = err.message || err;
+      console.warn(`⚠️ Error pada model ${model}:`, lastError);
     }
   }
 
-  throw new Error(`Gagal memanggil Gemini AI Portofolio: ${lastError}`);
+  throw new Error(`Gagal memanggil Gemini AI Portofolio. Pesan terakhir: ${lastError}`);
 }
 
 /**
@@ -89,15 +95,15 @@ export async function analyzePortfolioItem(
   item: PortfolioItem,
   forceRefresh = false
 ): Promise<PortfolioAnalysisResult> {
-  // 1. Ambil 30 hari data historis harga saham terkait dari Supabase
-  const { data: history } = await supabase
+  // 1. Ambil 60 hari data historis harga saham agar kalkulasi MA50 & MA20 akurat
+  const { data: history, error } = await supabase
     .from('daily_stock_prices')
     .select('date, open, high, low, close, volume')
     .eq('ticker', item.ticker)
     .order('date', { ascending: false })
-    .limit(30);
+    .limit(60); // Diubah ke 60 agar MA50 dihitung presisi
 
-  if (!history || history.length === 0) {
+  if (error || !history || history.length === 0) {
     throw new Error(`Data historis harga untuk ${item.ticker} tidak ditemukan.`);
   }
 
@@ -164,9 +170,15 @@ export async function analyzePortfolioItem(
   const lows = chronological.map((h) => Number(h.low));
   const volumes = chronological.map((h) => Number(h.volume));
 
-  const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(closes.length, 20);
-  const ma50 = closes.reduce((a, b) => a + b, 0) / closes.length;
-  const avgVol20 = volumes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(volumes.length, 20);
+  // Kalkulasi MA20 & MA50 Presisi
+  const ma20Slice = closes.slice(-20);
+  const ma20 = ma20Slice.reduce((a, b) => a + b, 0) / ma20Slice.length;
+
+  const ma50Slice = closes.slice(-50);
+  const ma50 = ma50Slice.reduce((a, b) => a + b, 0) / ma50Slice.length;
+
+  const avgVol20Slice = volumes.slice(-20);
+  const avgVol20 = avgVol20Slice.reduce((a, b) => a + b, 0) / avgVol20Slice.length;
 
   // Metrik Tren & Price Action (3 Hari Terakhir)
   const recent3Closes = closes.slice(-3);
@@ -199,10 +211,9 @@ export async function analyzePortfolioItem(
 
   const avgUpVolume10d = upDaysCount > 0 ? totalUpVolume / upDaysCount : 1;
   const avgDownVolume10d = downDaysCount > 0 ? totalDownVolume / downDaysCount : 1;
-  // Jika Ratio > 1.2, indikasi Akumulasi Bandar (Big Money Masuk Saat Naik)
   const bandarVolumeRatio10d = Number((avgUpVolume10d / avgDownVolume10d).toFixed(2));
 
-  // Detail 5 Hari Terakhir dengan status Candle & Volume vs Rata-Rata
+  // Detail 5 Hari Terakhir
   const last5Detail = chronological.slice(-5).map((h) => {
     const c = Number(h.close);
     const o = Number(h.open);
@@ -239,8 +250,8 @@ export async function analyzePortfolioItem(
       is_making_higher_lows: isHigherLows3D,
       dist_to_ma20_pct: Number((((currentClose - ma20) / ma20) * 100).toFixed(2)),
       dist_to_ma50_pct: Number((((currentClose - ma50) / ma50) * 100).toFixed(2)),
-      recent_high_30d: Math.max(...highs),
-      recent_low_30d: Math.min(...lows),
+      recent_high_30d: Math.max(...highs.slice(-30)),
+      recent_low_30d: Math.min(...lows.slice(-30)),
     },
     bandarmologi_and_volume_dynamics: {
       avg_volume_20d: Math.round(avgVol20),
@@ -314,15 +325,22 @@ WAJIB tanggapi HANYA dengan JSON valid berikut tanpa format markdown pembuka/pen
   `;
 
   const rawResult = await callPortfolioGemini(prompt);
-  const cleanJson = rawResult.replace(/```json|```/g, '').trim();
-  const parsed = JSON.parse(cleanJson);
+  
+  // Robust JSON Parsing dengan Fallback
+  let parsed: any = {};
+  try {
+    const cleanJson = rawResult.replace(/```json|```/g, '').trim();
+    parsed = JSON.parse(cleanJson);
+  } catch (err) {
+    console.error('Gagal parse JSON dari Gemini Portofolio:', err);
+  }
 
-  // Fallback default untuk KeyStats jika AI lupa/format kurang tepat
+  // Fallback default jika AI lupa memberikan struktur KeyStats/ActionPlan yang lengkap
   const defaultKeyStats: KeyStats = {
     trend_status: currentClose >= ma20 ? 'Strong Uptrend (Di atas MA20)' : 'Downtrend / Below MA20',
     bandarmologi_status: bandarVolumeRatio10d > 1.2 ? 'Accumulation' : bandarVolumeRatio10d < 0.8 ? 'Distribution' : 'Neutral',
     price_action_status: isHigherHighs3D ? 'Higher Highs 3 Hari' : 'Konsolidasi',
-    support_resistance: `Support MA20: Rp ${Math.round(ma20)} | Resis 30D: Rp ${Math.max(...highs)}`,
+    support_resistance: `Support MA20: Rp ${Math.round(ma20)} | Resis 30D: Rp ${Math.max(...highs.slice(-30))}`,
   };
 
   const finalResult: PortfolioAnalysisResult = {
@@ -360,7 +378,7 @@ WAJIB tanggapi HANYA dengan JSON valid berikut tanpa format markdown pembuka/pen
       action_recommendation: finalResult.action_recommendation,
       risk_level: finalResult.risk_level,
       key_reason: finalResult.key_reason,
-      key_stats: finalResult.key_stats, // Menyimpan JSON object key_stats
+      key_stats: finalResult.key_stats,
       action_plan: finalResult.action_plan,
       updated_at: new Date().toISOString(),
     },

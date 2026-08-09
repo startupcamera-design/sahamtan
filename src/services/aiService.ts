@@ -102,7 +102,7 @@ function analyzePillar1Trend(history: OHLCV[], ma50Current: number) {
   const closes = history.map((h) => h.close);
   const len = closes.length;
 
-  // Hitung MA50 10 hari lalu
+  // Hitung MA50 10 hari lalu (Membutuhkan minimal 60 data historis)
   const ma5010dAgo = calculateMA(closes.slice(0, len - 10), 50);
   const ma50Slope10d = ma5010dAgo > 0 ? ((ma50Current - ma5010dAgo) / ma5010dAgo) * 100 : 0;
 
@@ -122,12 +122,17 @@ function analyzePillar1Trend(history: OHLCV[], ma50Current: number) {
     proximityZone = '❌ BREAKDOWN ZONE (Harga di Bawah MA50)';
   }
 
-  // Hitung berapa hari harga bertahan di atas MA50 dalam 20 hari terakhir
+  // Hitung berapa hari harga bertahan di atas MA50 dalam 20 hari terakhir secara presisi
   let daysAbove = 0;
   const recent20 = history.slice(-20);
   recent20.forEach((h, idx) => {
-    const historicalMA50 = calculateMA(closes.slice(0, len - 20 + idx + 1), 50);
-    if (h.close >= historicalMA50) daysAbove++;
+    const historicalSlice = closes.slice(0, len - 20 + idx + 1);
+    if (historicalSlice.length >= 50) {
+      const historicalMA50 = calculateMA(historicalSlice, 50);
+      if (h.close >= historicalMA50) daysAbove++;
+    } else {
+      if (h.close >= ma50Current) daysAbove++;
+    }
   });
 
   return {
@@ -498,13 +503,13 @@ export async function analyzeStockWithAI(candidate: StockCandidate): Promise<AIA
   // 2. CEK KONDISI PASAR IHSG
   const ihsgInfo = await getIHSGMarketRegime(candidate.last_date);
 
-  // 3. AMBIL DATA RIWAYAT 50 HARI OHLCV
+  // 3. AMBIL DATA RIWAYAT 75 HARI OHLCV (Naik dari 50 ke 75 agar kalkulasi MA50 20d lalu presisi)
   const { data: history, error } = await supabase
     .from('daily_stock_prices')
     .select('date, open, high, low, close, volume')
     .eq('ticker', candidate.ticker)
     .order('date', { ascending: false })
-    .limit(50);
+    .limit(75);
 
   if (error || !history || history.length === 0) {
     throw new Error('Gagal mengambil data riwayat saham untuk analisis AI.');
@@ -590,7 +595,7 @@ export async function analyzeStockWithAI(candidate: StockCandidate): Promise<AIA
       : `✅ PASAR IHSG BULLISH: Optimalkan target kenaikan jika 4 Pilar menunjukkan sinyal konfirmasi yang solid.`;
 
   // 5. PROMPT GEMINI AI DENGAN RUBRIK 4 PILAR (TOTAL 100 POIN)
-const prompt = `
+  const prompt = `
 Anda adalah Senior Technical Analyst Saham Indonesia (IHSG) yang sangat disiplin menggunakan strategi "Pullback Sehat & Swing Trading".
 Analisis data teknikal 4 Pilar berikut secara teliti:
 
@@ -705,7 +710,9 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
 
   if (jsonMatch && jsonMatch[1]) {
     try {
-      const parsed = JSON.parse(jsonMatch[1]);
+      // Pembersihan format markdown ```json jika diselipkan oleh AI
+      const cleanJsonString = jsonMatch[1].replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(cleanJsonString);
       score = parsed.score ?? score;
       action = parsed.action ?? action;
       if (parsed.trading_plan) {

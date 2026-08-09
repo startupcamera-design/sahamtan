@@ -3,48 +3,63 @@ import { CsvUploader } from './components/CsvUploader';
 import { StockScreener } from './components/StockScreener';
 import { AIWinRateBadge } from './components/AIWinRateBadge';
 import { PortfolioAnalyzer } from './components/PortfolioAnalyzer';
-import { TrendingUp, UploadCloud, SlidersHorizontal, Briefcase, Sparkles } from 'lucide-react';
+import { 
+  TrendingUp, 
+  UploadCloud, 
+  SlidersHorizontal, 
+  Briefcase, 
+  Sparkles,
+  Zap,
+  CheckCircle2
+} from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'screener' | 'portfolio' | 'upload'>('screener');
-  
-  // Tanggal default hari ini (YYYY-MM-DD)
-  const todayDate = new Date().toISOString().split('T')[0];
-  const [selectedDate, setSelectedDate] = useState<string>(todayDate);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-3 sm:p-6 font-sans">
-      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-24 md:pb-8">
+      {/* Container Utama */}
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 pt-3 sm:pt-6 space-y-4 sm:space-y-6">
         
-        {/* Header App */}
-        <header className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-4 sm:p-5 shadow-lg backdrop-blur-md space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* ================= HEADER UTAMA ================= */}
+        <header className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-5 shadow-2xl backdrop-blur-md">
+          <div className="flex items-center justify-between gap-3">
             
-            {/* Title & Description */}
+            {/* Logo & Judul Aplikasi */}
             <div className="flex items-center space-x-3">
-              <div className="p-2 sm:p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 shrink-0">
-                <TrendingUp className="w-6 h-6 sm:w-8 sm:h-8" />
+              <div className="p-2 sm:p-2.5 bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 shrink-0 shadow-inner">
+                <TrendingUp className="w-5 h-5 sm:w-7 sm:h-7" />
               </div>
               <div>
-                <h1 className="text-base sm:text-2xl font-extrabold tracking-tight text-slate-100">
-                  AI Stock Pullback <span className="text-emerald-400">Analyzer</span>
-                </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-base sm:text-2xl font-extrabold tracking-tight text-white flex items-center gap-1.5">
+                    AI Stock <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300">Pullback</span>
+                  </h1>
+                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <Zap className="w-3 h-3 mr-1 fill-emerald-400" /> Pro v2.5
+                  </span>
+                </div>
                 <p className="text-[11px] sm:text-xs text-slate-400 line-clamp-1">
-                  IHSG Screener Logika AFL & Technical AI Portfolio Analysis
+                  Screener AFL Amibroker & Analisis Portofolio AI 4 Pilar
                 </p>
               </div>
             </div>
 
+            {/* Status Server / Egress Shield Indicator (Desktop) */}
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 border border-slate-700/60 rounded-xl text-xs text-slate-300">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span>Data & AI Cache Active</span>
+            </div>
           </div>
 
-          {/* Navigation Tabs - 3 Menu Navigasi Modern */}
-          <div className="flex bg-slate-900/80 p-1 rounded-xl border border-slate-700/60 overflow-x-auto">
+          {/* Navigasi Desktop (Hanya muncul di layar Sedang & Besar) */}
+          <nav className="hidden md:flex bg-slate-950/80 p-1.5 rounded-xl border border-slate-800/80 mt-4">
             <button
               onClick={() => setActiveTab('screener')}
-              className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 activeTab === 'screener'
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <SlidersHorizontal className="w-4 h-4" />
@@ -53,70 +68,119 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab('portfolio')}
-              className={`flex-1 min-w-[140px] flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 activeTab === 'portfolio'
-                  ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <Briefcase className="w-4 h-4 text-indigo-300" />
-              <span className="flex items-center gap-1">
-                Portofolio AI <Sparkles className="w-3 h-3 text-amber-300 fill-amber-300" />
+              <span className="flex items-center gap-1.5">
+                Portofolio AI <Sparkles className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('upload')}
-              className={`flex-1 min-w-[120px] flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-all ${
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 activeTab === 'upload'
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-900/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
               <UploadCloud className="w-4 h-4" />
-              <span>Import CSV</span>
+              <span>Import Data CSV</span>
             </button>
-          </div>
+          </nav>
         </header>
 
-        {/* Dynamic Content Area */}
+        {/* ================= KONTEN UTAMA ================= */}
         <main className="space-y-4">
           {activeTab === 'screener' && (
-            <>
-              {/* 1. Badge Win Rate AI */}
+            <div className="space-y-4 transition-all duration-300">
+              {/* 1. Stat / Win Rate Badge */}
               <AIWinRateBadge />
 
-              {/* 2. Komponen Utama Screener */}
+              {/* 2. Main Screener Component */}
               <StockScreener />
-            </>
+            </div>
           )}
 
           {activeTab === 'portfolio' && (
-            /* Komponen Evaluasi Kesehatan Portofolio AI */
-            <PortfolioAnalyzer />
+            <div className="transition-all duration-300">
+              <PortfolioAnalyzer />
+            </div>
           )}
 
           {activeTab === 'upload' && (
-            <section className="bg-slate-800 border border-slate-700 rounded-xl p-4 sm:p-6 shadow-lg space-y-4">
-              <div className="border-b border-slate-700 pb-3">
+            <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+              <div className="border-b border-slate-800 pb-3">
                 <h2 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <UploadCloud className="w-5 h-5 text-emerald-400" /> Import Data Saham Harian
+                  <UploadCloud className="w-5 h-5 text-emerald-400" /> Import Data Saham Harian (Multi-File)
                 </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Unggah file CSV harian OHLCV untuk memperbarui basis data saham di Supabase.
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  Unggah file CSV harian OHLCV untuk memperbarui basis data Supabase. Aplikasi otomatis memproses secara bertahap (*batching*) agar hemat kuota egress & tidak memicu limit API.
                 </p>
               </div>
 
               <CsvUploader 
                 onUploadSuccess={() => {
-                  console.log('Upload berhasil!');
-                  setActiveTab('screener'); // Otomatis balik ke tab screener setelah upload selesai
+                  setActiveTab('screener');
                 }} 
               />
             </section>
           )}
         </main>
 
+      </div>
+
+      {/* ================= MOBILE BOTTOM NAVIGATION BAR (KHUSUS HP) ================= */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 px-3 py-2 shadow-2xl">
+        <div className="flex items-center justify-around">
+          
+          {/* Nav Item: Screener */}
+          <button
+            onClick={() => setActiveTab('screener')}
+            className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
+              activeTab === 'screener'
+                ? 'text-emerald-400 font-bold scale-105'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <SlidersHorizontal className="w-5 h-5" />
+            <span className="text-[10px]">Screener</span>
+          </button>
+
+          {/* Nav Item: Portfolio */}
+          <button
+            onClick={() => setActiveTab('portfolio')}
+            className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all relative ${
+              activeTab === 'portfolio'
+                ? 'text-indigo-400 font-bold scale-105'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="relative">
+              <Briefcase className="w-5 h-5" />
+              <Sparkles className="w-2.5 h-2.5 text-amber-300 fill-amber-300 absolute -top-1 -right-1" />
+            </div>
+            <span className="text-[10px]">Portofolio</span>
+          </button>
+
+          {/* Nav Item: Upload */}
+          <button
+            onClick={() => setActiveTab('upload')}
+            className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
+              activeTab === 'upload'
+                ? 'text-emerald-400 font-bold scale-105'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <UploadCloud className="w-5 h-5" />
+            <span className="text-[10px]">Import CSV</span>
+          </button>
+
+        </div>
       </div>
     </div>
   );
