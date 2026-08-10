@@ -19,7 +19,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-24 md:pb-8">
       {/* Container Utama */}
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 pt-3 sm:pt-6 space-y-4 sm:space-y-6">
+      <div className="max-w-full mx-auto px-3 sm:px-6 pt-3 sm:pt-6 space-y-4 sm:space-y-6">
         
         {/* ================= HEADER UTAMA ================= */}
         <header className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-5 shadow-2xl backdrop-blur-md">

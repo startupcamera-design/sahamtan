@@ -381,26 +381,42 @@ function validateAndFixTradingPlan(
     return parseInt(digitsOnly, 10) || 0;
   };
 
+  // Helper untuk mendapatkan harga Entry Rata-rata dari entry_area (misal "6150 - 6225" -> 6187.5)
+  const getAverageEntryPrice = (entryAreaStr: string, defaultPrice: number): number => {
+    if (!entryAreaStr) return defaultPrice;
+    const matches = entryAreaStr.match(/\d[\d.]*/g);
+    if (!matches || matches.length === 0) return defaultPrice;
+
+    const prices = matches.map((p) => parseNum(p)).filter((p) => p > 0);
+    if (prices.length === 1) return prices[0];
+    if (prices.length >= 2) return (prices[0] + prices[1]) / 2; // Ambil nilai tengah kisaran
+    return defaultPrice;
+  };
+
   let sl = parseNum(plan.stop_loss);
   let tp1 = parseNum(plan.target_price_1);
   let tp2 = parseNum(plan.target_price_2);
 
-  if (sl <= 10 || sl >= closePrice || sl < closePrice * 0.5) {
+  // Tentukan harga acuan entry (Gunakan titik tengah entry_area jika valid, jika tidak gunakan closePrice)
+  const effectiveEntryPrice = getAverageEntryPrice(plan.entry_area, closePrice);
+
+  if (sl <= 10 || sl >= effectiveEntryPrice || sl < effectiveEntryPrice * 0.5) {
     console.warn(`🚨 Guardrail Triggered: SL dari AI (${plan.stop_loss}) tidak valid. Diperbaiki ke ATR SL: ${defaultSL}`);
     sl = defaultSL;
   }
 
-  if (tp1 <= closePrice) {
+  if (tp1 <= effectiveEntryPrice) {
     console.warn(`🚨 Guardrail Triggered: TP1 dari AI (${plan.target_price_1}) tidak valid. Diperbaiki.`);
     tp1 = defaultTP1;
   }
 
   if (tp2 <= tp1) {
-    tp2 = Math.round(tp1 + 1.5 * (atr14 || closePrice * 0.03));
+    tp2 = Math.round(tp1 + 1.5 * (atr14 || effectiveEntryPrice * 0.03));
   }
 
-  const risk = closePrice - sl;
-  const reward = tp1 - closePrice;
+  // Hitung Risk & Reward berdasarkan Harga Entry Efektif (bukan Close Price saat antre di bawah)
+  const risk = effectiveEntryPrice - sl;
+  const reward = tp1 - effectiveEntryPrice;
   const calculatedRR = risk > 0 ? (reward / risk).toFixed(2) : '2.0';
 
   return {
