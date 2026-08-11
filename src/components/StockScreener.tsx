@@ -18,7 +18,8 @@ import {
   ChevronUp,
   Target,
   ShieldAlert,
-  ArrowUpRight
+  ArrowUpRight,
+  Sliders
 } from 'lucide-react';
 import { CombinedAnalysisModal } from './CombinedAnalysisModal';
 
@@ -37,9 +38,10 @@ export interface ScreenerResult {
   tradingPlan?: TradingPlan | null;
   aiMarkdown?: string;
   isAnalyzing?: boolean;
+  aiStatusText?: string;
 }
 
-// 1. Helper untuk mengambil rata-rata angka harga dari string (misal: "4.000 – 4.040" -> 4020, "3.950" -> 3950)
+// 1. Helper untuk mengambil rata-rata angka harga dari string
 function parsePriceAvg(str?: string): number | null {
   if (!str) return null;
   const cleanStr = str.replace(/\./g, '');
@@ -50,7 +52,7 @@ function parsePriceAvg(str?: string): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
-// 2. Helper untuk menghitung persentase perubahan dari harga Entry ke Target/SL
+// 2. Helper untuk menghitung persentase perubahan
 function getPctBadge(targetStr?: string, entryStr?: string, fallbackPrice?: number): { text: string; isPositive: boolean } | null {
   if (!targetStr) return null;
   
@@ -68,7 +70,7 @@ function getPctBadge(targetStr?: string, entryStr?: string, fallbackPrice?: numb
   };
 }
 
-// 3. Helper untuk menghitung status SuperTrend bar terakhir
+// 3. Helper untuk menghitung status SuperTrend
 function getLatestSuperTrendStatus(
   prices: Array<{ close: number; high: number; low: number }>,
   period = 10,
@@ -136,10 +138,16 @@ export const StockScreener: React.FC = () => {
   const [hasRun, setHasRun] = useState(false);
   const [showFilterMobile, setShowFilterMobile] = useState(true);
 
-  // Param State
+  // Param State Screener Database
   const [lookbackDays, setLookbackDays] = useState(7);
   const [maxDistPct, setMaxDistPct] = useState(8);
   const [minVolume, setMinVolume] = useState(200000);
+
+  // ==========================================
+  // STATE FILTER HASIL (FRONTEND DISPLAY FILTER)
+  // ==========================================
+  const [filterSuperTrend, setFilterSuperTrend] = useState<'all' | 'green' | 'red'>('all');
+  const [filterPriceRange, setFilterPriceRange] = useState<'all' | 'under500' | '500to1000' | 'over1000'>('all');
 
   // Modal AI States & Chart Modal State
   const [selectedStock, setSelectedStock] = useState<ScreenerResult | null>(null);
@@ -149,7 +157,6 @@ export const StockScreener: React.FC = () => {
     setLoading(true);
     setHasRun(true);
     try {
-      // 1. Eksekusi RPC Screener dari Supabase
       const { data, error } = await supabase.rpc('run_pullback_screener', {
         p_lookback_days: lookbackDays,
         p_max_dist_pct: maxDistPct / 100,
@@ -160,7 +167,6 @@ export const StockScreener: React.FC = () => {
 
       const latestDate = data && data.length > 0 ? data[0].last_date : null;
 
-      // 2. Ambil Cache AI yang sudah ada
       let aiCacheMap: Record<string, { score: number; action: string; tradingPlan: TradingPlan | null; text: string }> = {};
       if (latestDate) {
         const caches = await fetchLatestAICaches(latestDate);
@@ -178,12 +184,10 @@ export const StockScreener: React.FC = () => {
         });
       }
 
-      // 3. OPTIMASI EGRESS: Ambil histori harga hanya 35 hari bursa terakhir untuk saham yang lolos
       const tickers = (data || []).map((row: any) => row.ticker);
       let supertrendMap: Record<string, 'green' | 'red'> = {};
 
       if (tickers.length > 0 && latestDate) {
-        // Hitung perkiraan tanggal batas 50 hari lalu untuk membatasi payload data
         const dateLimit = new Date(new Date(latestDate).getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
         const { data: priceHist } = await supabase
@@ -210,7 +214,6 @@ export const StockScreener: React.FC = () => {
         }
       }
 
-      // 4. Format & Gabungkan Hasil Screener
       const formattedResults: ScreenerResult[] = (data || []).map((row: any) => {
         const cached = aiCacheMap[row.ticker];
         return {
@@ -233,7 +236,6 @@ export const StockScreener: React.FC = () => {
       formattedResults.sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
       setResults(formattedResults);
 
-      // Tutup panel filter di mobile agar hasil langsung terlihat dengan jelas
       if (window.innerWidth < 768) {
         setShowFilterMobile(false);
       }
@@ -246,19 +248,32 @@ export const StockScreener: React.FC = () => {
 
   const handleAnalyzeAI = async (stock: ScreenerResult) => {
     setResults((prev) =>
-      prev.map((item) => (item.ticker === stock.ticker ? { ...item, isAnalyzing: true } : item))
+      prev.map((item) =>
+        item.ticker === stock.ticker
+          ? { ...item, isAnalyzing: true, aiStatusText: 'Menghubungkan AI...' }
+          : item
+      )
     );
 
     try {
-      const res = await analyzeStockWithAI({
-        ticker: stock.ticker,
-        last_date: stock.lastDate,
-        close_price: stock.closePrice,
-        ma50: stock.ma50,
-        dist_to_ma50_pct: stock.distToMA50Pct,
-        volume: stock.volume,
-        avg_volume_20: stock.avgVolume20,
-      });
+      const res = await analyzeStockWithAI(
+        {
+          ticker: stock.ticker,
+          last_date: stock.lastDate,
+          close_price: stock.closePrice,
+          ma50: stock.ma50,
+          dist_to_ma50_pct: stock.distToMA50Pct,
+          volume: stock.volume,
+          avg_volume_20: stock.avgVolume20,
+        },
+        (statusText) => {
+          setResults((prev) =>
+            prev.map((item) =>
+              item.ticker === stock.ticker ? { ...item, aiStatusText: statusText } : item
+            )
+          );
+        }
+      );
 
       const updatedStock: ScreenerResult = {
         ...stock,
@@ -267,6 +282,7 @@ export const StockScreener: React.FC = () => {
         tradingPlan: res.tradingPlan,
         aiMarkdown: res.analysisMarkdown,
         isAnalyzing: false,
+        aiStatusText: undefined,
       };
 
       setResults((prev) =>
@@ -277,10 +293,35 @@ export const StockScreener: React.FC = () => {
     } catch (err: any) {
       alert(`⚠️ Gagal menganalisis ${stock.ticker}: ${err.message}`);
       setResults((prev) =>
-        prev.map((item) => (item.ticker === stock.ticker ? { ...item, isAnalyzing: false } : item))
+        prev.map((item) =>
+          item.ticker === stock.ticker ? { ...item, isAnalyzing: false, aiStatusText: undefined } : item
+        )
       );
     }
   };
+
+  // ==========================================
+  // LOGIKA PENYARINGAN FILTER HASIL
+  // ==========================================
+  const filteredResults = results.filter((item) => {
+    // 1. Filter SuperTrend
+    if (filterSuperTrend !== 'all' && item.supertrendStatus !== filterSuperTrend) {
+      return false;
+    }
+
+    // 2. Filter Range Harga
+    if (filterPriceRange === 'under500' && item.closePrice >= 500) {
+      return false;
+    }
+    if (filterPriceRange === '500to1000' && (item.closePrice < 500 || item.closePrice > 1000)) {
+      return false;
+    }
+    if (filterPriceRange === 'over1000' && item.closePrice <= 1000) {
+      return false;
+    }
+
+    return true;
+  });
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -293,7 +334,6 @@ export const StockScreener: React.FC = () => {
             <span>Parameter Screening Pullback</span>
           </h2>
 
-          {/* Toggle Filter Khusus Mobile */}
           <button
             onClick={() => setShowFilterMobile(!showFilterMobile)}
             className="md:hidden flex items-center gap-1 text-xs text-slate-400 bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700"
@@ -304,7 +344,6 @@ export const StockScreener: React.FC = () => {
           </button>
         </div>
 
-        {/* Input Parameters Form */}
         <div className={`mt-4 ${showFilterMobile ? 'block' : 'hidden md:block'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-5">
             <div>
@@ -364,26 +403,62 @@ export const StockScreener: React.FC = () => {
         </div>
       </div>
 
-      {/* ================= HASIL SCREENER ================= */}
+      {/* ================= HASIL SCREENER & FILTER TAMPILAN ================= */}
       {hasRun && (
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl backdrop-blur-md">
-          <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+          
+          {/* HEADER & QUICK FILTER CONTROL */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-800">
             <h3 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
               <span>Saham Lolos Filter</span>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {results.length} Ticker
+                {filteredResults.length} dari {results.length} Ticker
               </span>
             </h3>
+
+            {/* DROPDOWN FILTER KECIL (SUPERTREND & RANGE HARGA) */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-slate-400 flex items-center gap-1 font-medium">
+                <Sliders className="w-3.5 h-3.5 text-emerald-400" /> Filter Tampilan:
+              </span>
+
+              {/* Filter SuperTrend */}
+              <select
+                value={filterSuperTrend}
+                onChange={(e) => setFilterSuperTrend(e.target.value as any)}
+                className="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="all">Semua SuperTrend</option>
+                <option value="green">🟢 Bullish</option>
+                <option value="red">🔴 Bearish</option>
+              </select>
+
+              {/* Filter Range Harga */}
+              <select
+                value={filterPriceRange}
+                onChange={(e) => setFilterPriceRange(e.target.value as any)}
+                className="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-1.5 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="all">Semua Harga</option>
+                <option value="under500">Harga &lt; 500</option>
+                <option value="500to1000">Harga 500 – 1.000</option>
+                <option value="over1000">Harga &gt; 1.000</option>
+              </select>
+            </div>
           </div>
 
-          {results.length === 0 ? (
+          {filteredResults.length === 0 ? (
             <div className="flex items-center justify-center p-8 text-slate-400 bg-slate-950/60 rounded-xl gap-3 text-xs sm:text-sm border border-slate-800/80">
               <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
-              <span>Tidak ada saham yang memenuhi kriteria pullback sehat pada parameter saat ini.</span>
+              <span>
+                {results.length === 0
+                  ? 'Tidak ada saham yang memenuhi kriteria pullback sehat pada parameter saat ini.'
+                  : 'Tidak ada saham yang sesuai dengan kombinasi filter SuperTrend/Harga yang Anda pilih.'}
+              </span>
             </div>
           ) : (
             <>
-              {/* ---------------- TAMPILAN TABLE (DESKTOP: SCREEN MID & LARGE) ---------------- */}
+              {/* ---------------- TAMPILAN TABLE (DESKTOP) ---------------- */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left text-xs sm:text-sm text-slate-300">
                   <thead className="bg-slate-950/80 text-[11px] uppercase text-slate-400 font-semibold tracking-wider">
@@ -402,10 +477,9 @@ export const StockScreener: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {results.map((res) => (
+                    {filteredResults.map((res) => (
                       <tr key={res.ticker} className="hover:bg-slate-800/40 transition-colors">
                         
-                        {/* Ticker & Chart Button */}
                         <td className="px-4 py-3.5 font-bold text-emerald-400 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <span className="text-base tracking-wide">{res.ticker}</span>
@@ -430,7 +504,6 @@ export const StockScreener: React.FC = () => {
                           +{res.distToMA50Pct}%
                         </td>
 
-                        {/* SuperTrend */}
                         <td className="px-4 py-3.5 text-center whitespace-nowrap">
                           {res.supertrendStatus === 'green' ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/80">
@@ -443,7 +516,6 @@ export const StockScreener: React.FC = () => {
                           )}
                         </td>
 
-                        {/* Skor AI */}
                         <td className="px-4 py-3.5 font-extrabold whitespace-nowrap">
                           {res.aiScore !== undefined ? (
                             <span className={`px-2 py-0.5 rounded-md text-xs ${
@@ -458,7 +530,6 @@ export const StockScreener: React.FC = () => {
                           )}
                         </td>
 
-                        {/* Rekomendasi AI */}
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           {res.aiAction ? (
                             <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-slate-800 text-emerald-300 border border-slate-700 flex items-center gap-1 w-fit">
@@ -469,7 +540,6 @@ export const StockScreener: React.FC = () => {
                           )}
                         </td>
 
-                        {/* Trading Plan AI */}
                         <td className="px-4 py-3.5 text-xs min-w-[210px]">
                           {res.tradingPlan ? (() => {
                             const slPct = getPctBadge(res.tradingPlan.stop_loss, res.tradingPlan.entry_area, res.closePrice);
@@ -502,7 +572,6 @@ export const StockScreener: React.FC = () => {
                           )}
                         </td>
 
-                        {/* R:R Ratio */}
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           {res.tradingPlan?.rr_ratio ? (
                             <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800/80 text-xs font-bold">
@@ -513,17 +582,21 @@ export const StockScreener: React.FC = () => {
                           )}
                         </td>
 
-                        {/* Aksi AI Button */}
                         <td className="px-4 py-3.5 text-center whitespace-nowrap">
                           <button
                             onClick={() =>
                               res.aiMarkdown ? setSelectedStock(res) : handleAnalyzeAI(res)
                             }
                             disabled={res.isAnalyzing}
-                            className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all mx-auto disabled:opacity-50 cursor-pointer active:scale-95"
+                            className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all mx-auto disabled:opacity-80 cursor-pointer active:scale-95"
                           >
                             {res.isAnalyzing ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <div className="flex items-center gap-1.5">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                                <span className="text-[10px] text-amber-200 animate-pulse font-mono">
+                                  {res.aiStatusText || 'Menganalisis...'}
+                                </span>
+                              </div>
                             ) : res.aiMarkdown ? (
                               <>
                                 <Bot className="w-4 h-4" /> Lihat AI
@@ -542,9 +615,9 @@ export const StockScreener: React.FC = () => {
                 </table>
               </div>
 
-              {/* ---------------- TAMPILAN CARD GRID (MOBILE: KHUSUS HP) ---------------- */}
+              {/* ---------------- TAMPILAN CARD GRID (MOBILE) ---------------- */}
               <div className="md:hidden space-y-3">
-                {results.map((res) => {
+                {filteredResults.map((res) => {
                   const slPct = res.tradingPlan ? getPctBadge(res.tradingPlan.stop_loss, res.tradingPlan.entry_area, res.closePrice) : null;
                   const tp1Pct = res.tradingPlan ? getPctBadge(res.tradingPlan.target_price_1, res.tradingPlan.entry_area, res.closePrice) : null;
 
@@ -553,7 +626,6 @@ export const StockScreener: React.FC = () => {
                       key={res.ticker} 
                       className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 space-y-3 shadow-lg"
                     >
-                      {/* Card Header: Ticker, Price, Chart Button */}
                       <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                         <div className="flex items-center gap-2">
                           <span className="text-lg font-extrabold text-emerald-400">{res.ticker}</span>
@@ -579,7 +651,6 @@ export const StockScreener: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Stat Grid Mobile */}
                       <div className="grid grid-cols-3 gap-2 text-xs">
                         <div className="bg-slate-900/90 p-2 rounded-xl border border-slate-800/80">
                           <span className="text-[10px] text-slate-400 block">HARGA CLOSE</span>
@@ -599,7 +670,6 @@ export const StockScreener: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Trading Plan Mobile Card */}
                       {res.tradingPlan ? (
                         <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 space-y-1.5 text-xs">
                           <div className="flex items-center justify-between">
@@ -629,18 +699,19 @@ export const StockScreener: React.FC = () => {
                         </div>
                       ) : null}
 
-                      {/* Action Button Mobile */}
                       <button
                         onClick={() =>
                           res.aiMarkdown ? setSelectedStock(res) : handleAnalyzeAI(res)
                         }
                         disabled={res.isAnalyzing}
-                        className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                        className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow flex items-center justify-center gap-2 transition-all disabled:opacity-80"
                       >
                         {res.isAnalyzing ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Menganalisis AI...</span>
+                            <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                            <span className="text-amber-200 animate-pulse font-mono">
+                              {res.aiStatusText || 'Menganalisis...'}
+                            </span>
                           </>
                         ) : res.aiMarkdown ? (
                           <>
@@ -667,8 +738,6 @@ export const StockScreener: React.FC = () => {
       {selectedStock && selectedStock.aiMarkdown && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden max-h-[92vh] sm:max-h-[90vh] flex flex-col">
-            
-            {/* Modal Header */}
             <div className="px-4 sm:px-6 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950 shrink-0">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-emerald-400" />
@@ -684,7 +753,6 @@ export const StockScreener: React.FC = () => {
               </button>
             </div>
 
-            {/* Quick Summary Card di Top Modal */}
             {selectedStock.tradingPlan && (() => {
               const slPct = getPctBadge(selectedStock.tradingPlan.stop_loss, selectedStock.tradingPlan.entry_area, selectedStock.closePrice);
               const tp1Pct = getPctBadge(selectedStock.tradingPlan.target_price_1, selectedStock.tradingPlan.entry_area, selectedStock.closePrice);
@@ -720,12 +788,10 @@ export const StockScreener: React.FC = () => {
               );
             })()}
 
-            {/* Content Body */}
             <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
               <AIAnalysisViewer content={selectedStock.aiMarkdown} />
             </div>
 
-            {/* Modal Footer */}
             <div className="px-4 sm:px-6 py-3 border-t border-slate-800 bg-slate-950 flex justify-end shrink-0">
               <button
                 onClick={() => setSelectedStock(null)}

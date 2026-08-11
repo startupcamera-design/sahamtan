@@ -4,13 +4,19 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+// 1. KUMPULKAN KUMPULAN API KEY DARI ENV
+const GEMINI_API_KEYS = [
+  import.meta.env.VITE_GEMINI_API_KEY,
+  import.meta.env.VITE_GEMINI_API_KEY_1,
+  import.meta.env.VITE_GEMINI_API_KEY_2,
+  import.meta.env.VITE_GEMINI_API_KEY_3,
+].filter(Boolean); // Memfilter key yang tidak terisi/undefined
 
-// DAFTAR MODEL GEMINI BERDASARKAN PRIORITAS (Fallback Chain)
+// 2. DAFTAR MODEL BERDASARKAN PRIORITAS
 const GEMINI_MODELS = [
   'gemini-3.6-flash', // Model Utama
-  'gemini-3.5-flash',   // Cadangan Utama
-  'gemini-3.0-flash',   // Cadangan Akses Cepat
+  'gemini-3.5-flash', // Cadangan Utama
+  'gemini-3.0-flash', // Cadangan Akses Cepat
 ];
 
 export type MarketRegime = 'BULLISH' | 'SIDEWAYS_BEARISH';
@@ -433,66 +439,85 @@ function validateAndFixTradingPlan(
 // GEMINI API CALLER WITH FALLBACK CHAIN
 // ==========================================
 
-async function callGeminiAPI(prompt: string): Promise<string> {
+async function callGeminiAPI(
+  prompt: string,
+  onProgress?: (status: string) => void
+): Promise<string> {
   let lastError = '';
 
+  if (GEMINI_API_KEYS.length === 0) {
+    throw new Error('Tidak ada VITE_GEMINI_API_KEY yang terdeteksi di file .env');
+  }
+
   for (const model of GEMINI_MODELS) {
-    try {
-      console.log(`🤖 Mencoba analisis menggunakan model: ${model}...`);
+    for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
+      const apiKey = GEMINI_API_KEYS[keyIndex];
+      const keyLabel = keyIndex === 0 ? 'Utama' : `Cadangan ${keyIndex}`;
+      const statusMsg = `Model ${model.replace('gemini-', '')} (Key ${keyLabel})`;
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': GEMINI_API_KEY,
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.2,
+      try {
+        // Kirim status ke UI
+        if (onProgress) onProgress(`${statusMsg}...`);
+        console.log(`🤖 Coba analisis [Model: ${model}] dengan [API Key: ${keyLabel}]...`);
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-goog-api-key': apiKey,
             },
-          }),
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.2,
+              },
+            }),
+          }
+        );
+
+        const json = await response.json();
+
+        if (!response.ok) {
+          const errorMsg = json.error?.message || response.statusText;
+          console.warn(`⚠️ [Model ${model}] & [Key ${keyLabel}] gagal (${response.status}): ${errorMsg}`);
+          lastError = errorMsg;
+
+          if (
+            [429, 403, 503, 500].includes(response.status) ||
+            errorMsg.toLowerCase().includes('quota') ||
+            errorMsg.toLowerCase().includes('limit')
+          ) {
+            if (onProgress) onProgress(`Limit pada ${statusMsg}, beralih...`);
+            continue;
+          }
+
+          throw new Error(errorMsg);
         }
-      );
 
-      const json = await response.json();
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error(`Respons dari model ${model} kosong.`);
 
-      if (!response.ok) {
-        const errorMsg = json.error?.message || response.statusText;
-        console.warn(`⚠️ Model ${model} gagal (${response.status}): ${errorMsg}`);
-        lastError = errorMsg;
-
-        if ([429, 403, 503, 500].includes(response.status) || errorMsg.includes('quota') || errorMsg.includes('limit')) {
-          console.log(`🔄 Mengalihkan ke model fallback berikutnya...`);
-          continue;
-        }
-
-        throw new Error(errorMsg);
+        return text;
+      } catch (err: any) {
+        console.warn(`⚠️ Terjadi kesalahan pada [Model ${model}] - [Key ${keyLabel}]:`, err.message || err);
+        lastError = err.message || err;
       }
-
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
-        throw new Error(`Respons dari model ${model} kosong.`);
-      }
-
-      console.log(`✅ Berhasil menggunakan model: ${model}`);
-      return text;
-    } catch (err: any) {
-      console.warn(`⚠️ Gagal pada model ${model}:`, err.message || err);
-      lastError = err.message || err;
     }
   }
 
-  throw new Error(`Semua model Gemini mengalami limit/error. Pesan terakhir: ${lastError}`);
+  throw new Error(`Seluruh kombinasi API Key & Model Gemini telah habis/limit. Pesan terakhir: ${lastError}`);
 }
 
 // ==========================================
 // MAIN FUNCTION: ANALYZE STOCK WITH AI (4 PILARS)
 // ==========================================
 
-export async function analyzeStockWithAI(candidate: StockCandidate): Promise<AIAnalysisResult> {
+export async function analyzeStockWithAI(
+  candidate: StockCandidate,
+  onProgress?: (statusText: string) => void
+): Promise<AIAnalysisResult> {
   // 1. CEK CACHE SUPABASE
   const { data: cachedData } = await supabase
     .from('ai_analysis_cache')
@@ -515,6 +540,9 @@ export async function analyzeStockWithAI(candidate: StockCandidate): Promise<AIA
       fromCache: true,
     };
   }
+
+  // UPDATE STATUS STATUS LOADING JIKA PROGRESS CALLBACK ADA
+  if (onProgress) onProgress('Mengecek IHSG & Mengambil Data...');
 
   // 2. CEK KONDISI PASAR IHSG
   const ihsgInfo = await getIHSGMarketRegime(candidate.last_date);
@@ -543,6 +571,8 @@ export async function analyzeStockWithAI(candidate: StockCandidate): Promise<AIA
     .reverse();
 
   // === PRE-PROCESSING INDIKATOR & KALKULASI 4 PILAR ===
+  if (onProgress) onProgress('Menghitung 4 Pilar & Indikator...');
+
   const closePrices = chronologicalHistory.map((h) => h.close);
 
   const ma20 = calculateMA(closePrices, 20);
@@ -714,8 +744,10 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
 6. **Catatan Peringatan Risiko / Red Flags** (Gunakan format Blockquote \`>\`)
   `;
 
-  // 6. EKSEKUSI PANGGILAN GEMINI API
-  const rawText = await callGeminiAPI(prompt);
+  // 6. EKSEKUSI PANGGILAN GEMINI API (DENGAN MENERUSKAN ONPROGRESS)
+  const rawText = await callGeminiAPI(prompt, onProgress);
+
+  if (onProgress) onProgress('Memproses & Mengvalidasi Hasil...');
 
   // 7. EKSTRAKSI RINGKASAN JSON
   let score = 70;
