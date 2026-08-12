@@ -46,6 +46,7 @@ export interface AIAnalysisResult {
   tradingPlan: TradingPlan | null;
   analysisMarkdown: string;
   fromCache: boolean;
+  usedModel?: string; // 👈 Ditambahkan agar bisa menampilkan model AI di modal screener
 }
 
 interface OHLCV {
@@ -442,7 +443,7 @@ function validateAndFixTradingPlan(
 async function callGeminiAPI(
   prompt: string,
   onProgress?: (status: string) => void
-): Promise<string> {
+): Promise<{ text: string; usedModel: string }> { // 👈 Diubah agar mengembalikan nama model
   let lastError = '';
 
   if (GEMINI_API_KEYS.length === 0) {
@@ -499,7 +500,7 @@ async function callGeminiAPI(
         const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) throw new Error(`Respons dari model ${model} kosong.`);
 
-        return text;
+        return { text, usedModel: model }; // 👈 Kembalikan teks beserta nama model yang berhasil
       } catch (err: any) {
         console.warn(`⚠️ Terjadi kesalahan pada [Model ${model}] - [Key ${keyLabel}]:`, err.message || err);
         lastError = err.message || err;
@@ -538,6 +539,7 @@ export async function analyzeStockWithAI(
         : null,
       analysisMarkdown: cachedData.analysis_text,
       fromCache: true,
+      usedModel: 'Supabase Cache', // 👈 Diberi tanda jika memuat dari cache
     };
   }
 
@@ -745,7 +747,7 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
   `;
 
   // 6. EKSEKUSI PANGGILAN GEMINI API (DENGAN MENERUSKAN ONPROGRESS)
-  const rawText = await callGeminiAPI(prompt, onProgress);
+  const { text: rawText, usedModel } = await callGeminiAPI(prompt, onProgress); // 👈 Menangkap result { text, usedModel }
 
   if (onProgress) onProgress('Memproses & Mengvalidasi Hasil...');
 
@@ -801,6 +803,7 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
     tradingPlan: validatedTradingPlan,
     analysisMarkdown: cleanMarkdown,
     fromCache: false,
+    usedModel, // 👈 Meneruskan model AI yang merespons
   };
 }
 

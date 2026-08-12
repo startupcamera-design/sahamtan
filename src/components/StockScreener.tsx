@@ -19,7 +19,11 @@ import {
   Target,
   ShieldAlert,
   ArrowUpRight,
-  Sliders
+  Sliders,
+  Cpu,
+  CheckCircle,
+  XCircle,
+  FileText
 } from 'lucide-react';
 import { CombinedAnalysisModal } from './CombinedAnalysisModal';
 
@@ -39,6 +43,16 @@ export interface ScreenerResult {
   aiMarkdown?: string;
   isAnalyzing?: boolean;
   aiStatusText?: string;
+}
+
+// Interface khusus ringkasan sementara Batch AI (Tidak disimpan di DB)
+export interface BatchSummaryItem {
+  ticker: string;
+  score?: number;
+  action?: string;
+  modelUsed: string;
+  status: 'success' | 'failed';
+  errorMessage?: string;
 }
 
 // 1. Helper untuk mengambil rata-rata angka harga dari string
@@ -143,11 +157,15 @@ export const StockScreener: React.FC = () => {
   const [maxDistPct, setMaxDistPct] = useState(8);
   const [minVolume, setMinVolume] = useState(200000);
 
-  // ==========================================
-  // STATE FILTER HASIL (FRONTEND DISPLAY FILTER)
-  // ==========================================
+  // State Filter Hasil
   const [filterSuperTrend, setFilterSuperTrend] = useState<'all' | 'green' | 'red'>('all');
   const [filterPriceRange, setFilterPriceRange] = useState<'all' | 'under500' | '500to1000' | 'over1000'>('all');
+
+  // State Batch AI Processing & Ringkasan Laporan
+  const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
+  const [batchProgressText, setBatchProgressText] = useState('');
+  const [batchSummaryList, setBatchSummaryList] = useState<BatchSummaryItem[]>([]);
+  const [showBatchModal, setShowBatchModal] = useState(false);
 
   // Modal AI States & Chart Modal State
   const [selectedStock, setSelectedStock] = useState<ScreenerResult | null>(null);
@@ -246,7 +264,7 @@ export const StockScreener: React.FC = () => {
     }
   };
 
-  const handleAnalyzeAI = async (stock: ScreenerResult) => {
+  const handleAnalyzeAI = async (stock: ScreenerResult): Promise<{ res: ScreenerResult | null; modelUsed: string }> => {
     setResults((prev) =>
       prev.map((item) =>
         item.ticker === stock.ticker
@@ -256,7 +274,7 @@ export const StockScreener: React.FC = () => {
     );
 
     try {
-      const res = await analyzeStockWithAI(
+      const res: any = await analyzeStockWithAI(
         {
           ticker: stock.ticker,
           last_date: stock.lastDate,
@@ -289,27 +307,86 @@ export const StockScreener: React.FC = () => {
         prev.map((item) => (item.ticker === stock.ticker ? updatedStock : item))
       );
 
-      setSelectedStock(updatedStock);
+      return { res: updatedStock, modelUsed: res.usedModel || 'gemini-3.6-flash' };
     } catch (err: any) {
-      alert(`⚠️ Gagal menganalisis ${stock.ticker}: ${err.message}`);
       setResults((prev) =>
         prev.map((item) =>
           item.ticker === stock.ticker ? { ...item, isAnalyzing: false, aiStatusText: undefined } : item
         )
       );
+      throw err;
     }
+  };
+
+  // ==========================================
+  // BATCH AI GENERATOR BERSAMA RINGKASAN MODAL
+  // ==========================================
+  const handleBatchAnalyzeAI = async () => {
+    const unanalyzed = filteredResults.filter((item) => !item.aiMarkdown);
+    
+    if (unanalyzed.length === 0) {
+      alert('Semua saham pada hasil filter saat ini sudah memiliki laporan AI!');
+      return;
+    }
+
+    if (!confirm(`Apakah Anda ingin menganalisis ${unanalyzed.length} saham secara otomatis bergantian?`)) {
+      return;
+    }
+
+    setIsBatchAnalyzing(true);
+    const summaryAccumulator: BatchSummaryItem[] = [];
+
+    for (let i = 0; i < unanalyzed.length; i++) {
+      const targetStock = unanalyzed[i];
+      setBatchProgressText(`Menganalisis (${i + 1}/${unanalyzed.length}): ${targetStock.ticker}`);
+
+      try {
+        const { res, modelUsed } = await handleAnalyzeAI(targetStock);
+        if (res) {
+          summaryAccumulator.push({
+            ticker: targetStock.ticker,
+            score: res.aiScore,
+            action: res.aiAction,
+            modelUsed: modelUsed,
+            status: 'success',
+          });
+        }
+      } catch (err: any) {
+        summaryAccumulator.push({
+          ticker: targetStock.ticker,
+          modelUsed: 'Gagal / Timeout',
+          status: 'failed',
+          errorMessage: err.message || 'Gagal memanggil API AI',
+        });
+      }
+
+      // Delay 1 detik antar request agar aman dari rate limit kuota API
+      if (i < unanalyzed.length - 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+
+    setIsBatchAnalyzing(false);
+    setBatchProgressText('');
+    setBatchSummaryList(summaryAccumulator);
+    setShowBatchModal(true); // Tampilkan modal ringkasan
   };
 
   // ==========================================
   // LOGIKA PENYARINGAN FILTER HASIL
   // ==========================================
   const filteredResults = results.filter((item) => {
-    // 1. Filter SuperTrend
+    // 1. Filter Khusus Ticker 4 Huruf
+    if (item.ticker.length !== 4) {
+      return false;
+    }
+
+    // 2. Filter SuperTrend
     if (filterSuperTrend !== 'all' && item.supertrendStatus !== filterSuperTrend) {
       return false;
     }
 
-    // 2. Filter Range Harga
+    // 3. Filter Range Harga
     if (filterPriceRange === 'under500' && item.closePrice >= 500) {
       return false;
     }
@@ -322,6 +399,8 @@ export const StockScreener: React.FC = () => {
 
     return true;
   });
+
+  const unanalyzedCount = filteredResults.filter((item) => !item.aiMarkdown).length;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -385,7 +464,7 @@ export const StockScreener: React.FC = () => {
 
           <button
             onClick={handleRunScreener}
-            disabled={loading}
+            disabled={loading || isBatchAnalyzing}
             className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
           >
             {loading ? (
@@ -409,12 +488,35 @@ export const StockScreener: React.FC = () => {
           
           {/* HEADER & QUICK FILTER CONTROL */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-800">
-            <h3 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
-              <span>Saham Lolos Filter</span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {filteredResults.length} dari {results.length} Ticker
-              </span>
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
+                <span>Saham Lolos Filter</span>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  {filteredResults.length} Ticker
+                </span>
+              </h3>
+
+              {/* TOMBOL BATCH AI GENERATOR */}
+              {unanalyzedCount > 0 && (
+                <button
+                  onClick={handleBatchAnalyzeAI}
+                  disabled={isBatchAnalyzing}
+                  className="px-3 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer active:scale-95"
+                >
+                  {isBatchAnalyzing ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span className="font-mono text-[11px]">{batchProgressText}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cpu className="w-3.5 h-3.5 text-amber-200" />
+                      <span>Batch AI ({unanalyzedCount} Saham)</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
 
             {/* DROPDOWN FILTER KECIL (SUPERTREND & RANGE HARGA) */}
             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -453,7 +555,7 @@ export const StockScreener: React.FC = () => {
               <span>
                 {results.length === 0
                   ? 'Tidak ada saham yang memenuhi kriteria pullback sehat pada parameter saat ini.'
-                  : 'Tidak ada saham yang sesuai dengan kombinasi filter SuperTrend/Harga yang Anda pilih.'}
+                  : 'Tidak ada ticker saham 4 huruf yang sesuai dengan kombinasi filter Anda.'}
               </span>
             </div>
           ) : (
@@ -587,7 +689,7 @@ export const StockScreener: React.FC = () => {
                             onClick={() =>
                               res.aiMarkdown ? setSelectedStock(res) : handleAnalyzeAI(res)
                             }
-                            disabled={res.isAnalyzing}
+                            disabled={res.isAnalyzing || isBatchAnalyzing}
                             className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all mx-auto disabled:opacity-80 cursor-pointer active:scale-95"
                           >
                             {res.isAnalyzing ? (
@@ -703,7 +805,7 @@ export const StockScreener: React.FC = () => {
                         onClick={() =>
                           res.aiMarkdown ? setSelectedStock(res) : handleAnalyzeAI(res)
                         }
-                        disabled={res.isAnalyzing}
+                        disabled={res.isAnalyzing || isBatchAnalyzing}
                         className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow flex items-center justify-center gap-2 transition-all disabled:opacity-80"
                       >
                         {res.isAnalyzing ? (
@@ -731,6 +833,84 @@ export const StockScreener: React.FC = () => {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* ================= MODAL RINGKASAN BATCH AI (SEMENTARA) ================= */}
+      {showBatchModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            
+            {/* Header Modal */}
+            <div className="px-5 py-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-400" />
+                <h3 className="text-base font-bold text-slate-100">
+                  Laporan Ringkasan Batch AI
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowBatchModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Sub-header statistik */}
+            <div className="bg-slate-950/60 px-5 py-2.5 border-b border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+              <span>Total Diproses: <strong className="text-slate-200">{batchSummaryList.length} Saham</strong></span>
+              <span>
+                Berhasil: <strong className="text-emerald-400">{batchSummaryList.filter((b) => b.status === 'success').length}</strong> | 
+                Gagal: <strong className="text-rose-400">{batchSummaryList.filter((b) => b.status === 'failed').length}</strong>
+              </span>
+            </div>
+
+            {/* Daftar Ticker & Model AI */}
+            <div className="p-4 overflow-y-auto space-y-2.5 divide-y divide-slate-800/50">
+              {batchSummaryList.map((item) => (
+                <div key={item.ticker} className="pt-2.5 first:pt-0 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2.5">
+                    {item.status === 'success' ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <div>
+                      <span className="font-extrabold text-slate-100 text-sm mr-2">{item.ticker}</span>
+                      {item.status === 'success' ? (
+                        <span className="text-[11px] text-emerald-300 font-medium">
+                          {item.action} ({item.score}/100)
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-rose-400 italic">
+                          {item.errorMessage}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Badge Nama Model AI (Transien) */}
+                  <div className="text-right shrink-0">
+                    <span className="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 rounded-md font-mono text-[10px]">
+                      🤖 {item.modelUsed}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer Modal */}
+            <div className="px-5 py-3 border-t border-slate-800 bg-slate-950 flex justify-end shrink-0">
+              <button
+                onClick={() => setShowBatchModal(false)}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                Selesai & Tutup
+              </button>
+            </div>
+
+          </div>
         </div>
       )}
 
