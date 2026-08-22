@@ -16,7 +16,9 @@ import {
   Coins, 
   CheckCircle2, 
   Calculator, 
-  ShieldAlert 
+  ShieldAlert,
+  ArrowUpRight,
+  ArrowDownRight
 } from 'lucide-react';
 
 export interface ExtendedPortfolioItem extends PortfolioItem {
@@ -35,6 +37,9 @@ export const PortfolioAnalyzer: React.FC = () => {
   // Modal State Control
   const [isAddStockOpen, setIsAddStockOpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
+  
+  // State Modal Cash Baru
+  const [cashAction, setCashAction] = useState<'SET' | 'DEPOSIT' | 'WITHDRAW'>('SET');
   const [cashInput, setCashInput] = useState('');
 
   // Form Input Saham Baru
@@ -70,11 +75,23 @@ export const PortfolioAnalyzer: React.FC = () => {
     }
   };
 
+  // 🛠️ HANDLER CASH YANG DISESUAIKAN (SUPPORTS DEPOSIT / WITHDRAW / SET)
   const handleSaveCash = (e: React.FormEvent) => {
     e.preventDefault();
     const val = parseFloat(cashInput) || 0;
-    setCashBalance(val);
-    localStorage.setItem('user_cash_balance', String(val));
+    let newCash = cashBalance;
+
+    if (cashAction === 'SET') {
+      newCash = val;
+    } else if (cashAction === 'DEPOSIT') {
+      newCash = cashBalance + val;
+    } else if (cashAction === 'WITHDRAW') {
+      newCash = Math.max(0, cashBalance - val);
+    }
+
+    setCashBalance(newCash);
+    localStorage.setItem('user_cash_balance', String(newCash));
+    setCashInput('');
     setIsCashModalOpen(false);
   };
 
@@ -180,8 +197,8 @@ export const PortfolioAnalyzer: React.FC = () => {
       await saveDailyPortfolioSnapshot({
         totalInvestment: portfolioSummary.totalStockInvestment,
         totalCurrentValue: portfolioSummary.totalStockCurrentValue,
+        cashBalance: cashBalance,
         floatingPLRp: portfolioSummary.floatingPLRp,
-        floatingPLPct: portfolioSummary.floatingPLPct,
         stockCount: portfolioSummary.openCount,
       });
       alert('✅ Snapshot histori portofolio berhasil disimpan!');
@@ -212,7 +229,6 @@ export const PortfolioAnalyzer: React.FC = () => {
 
     setIsSubmitting(true);
 
-    // Cek apakah posisi Ticker ini sudah OPEN (untuk Average Up/Down)
     const existingPosition = portfolio.find(
       (item) => item.ticker === cleanTicker && (item.status || 'OPEN') === 'OPEN'
     );
@@ -223,7 +239,6 @@ export const PortfolioAnalyzer: React.FC = () => {
       const oldBuyPrice = existingPosition.buy_price;
       const newTotalLots = oldLots + lots;
       
-      // Rumus Weighted Average Price
       const newWeightedAvgPrice = Math.round(
         (oldBuyPrice * oldLots + buyPrice * lots) / newTotalLots
       );
@@ -336,7 +351,6 @@ export const PortfolioAnalyzer: React.FC = () => {
     const proceeds = sellPrice * sellLots * 100;
 
     if (isFullSell) {
-      // JUAL TOTAL (CLOSE POSITION)
       const { error } = await supabase
         .from('user_portfolio')
         .update({
@@ -356,7 +370,6 @@ export const PortfolioAnalyzer: React.FC = () => {
         );
       }
     } else {
-      // PARTIAL SELL (JUAL SEBAGIAN LOT)
       const remainingLots = sellingStock.lots - sellLots;
 
       const { error } = await supabase
@@ -373,7 +386,6 @@ export const PortfolioAnalyzer: React.FC = () => {
       }
     }
 
-    // Tambahkan Hasil Penjualan ke Cash Balance
     const updatedCash = cashBalance + proceeds;
     setCashBalance(updatedCash);
     localStorage.setItem('user_cash_balance', String(updatedCash));
@@ -418,6 +430,13 @@ export const PortfolioAnalyzer: React.FC = () => {
     }
   };
 
+  // Helper format ringkas angka RDN Cash di tombol
+  const formatCompactRp = (val: number) => {
+    if (val >= 1000000000) return `Rp ${(val / 1000000000).toFixed(1)}M`;
+    if (val >= 1000000) return `Rp ${(val / 1000000).toFixed(1)}Jt`;
+    return `Rp ${val.toLocaleString('id-ID')}`;
+  };
+
   return (
     <div className="space-y-5">
 
@@ -432,15 +451,17 @@ export const PortfolioAnalyzer: React.FC = () => {
             <span>Tambah / Average Up Saham</span>
           </button>
 
+          {/* Tombol Kelola Cash */}
           <button
             onClick={() => {
+              setCashAction('SET');
               setCashInput(cashBalance ? String(cashBalance) : '');
               setIsCashModalOpen(true);
             }}
             className="text-xs bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 font-bold px-3.5 py-2.5 rounded-xl flex items-center gap-2 transition active:scale-95 cursor-pointer"
           >
             <Coins className="w-4 h-4 text-amber-400" />
-            <span>Kelola Cash ({cashBalance > 0 ? `Rp ${(cashBalance/1000000).toFixed(1)}M` : 'Rp 0'})</span>
+            <span>Kelola Cash ({formatCompactRp(cashBalance)})</span>
           </button>
         </div>
 
@@ -758,28 +779,90 @@ export const PortfolioAnalyzer: React.FC = () => {
         </div>
       )}
 
-      {/* ================= MODAL KELOLA CASH ================= */}
+      {/* ================= MODAL KELOLA CASH (DISEMPURNAKAN DENGAN MODE DEPOSIT / WITHDRAW / SET) ================= */}
       {isCashModalOpen && (
-        <div className="fixed inset-0 z-[999999] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-5 space-y-4">
-            <h3 className="font-bold text-base text-white">Update Saldo Cash (RP)</h3>
-            <form onSubmit={handleSaveCash} className="space-y-4">
-              <input
-                type="number"
-                value={cashInput}
-                onChange={(e) => setCashInput(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-amber-300 font-bold text-base"
-                required
-              />
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => setIsCashModalOpen(false)} className="px-4 py-2 bg-slate-800 text-xs font-semibold rounded-xl">
-                  Batal
+        <div className="fixed inset-0 z-[999999] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden text-slate-200">
+            
+            <div className="px-5 py-4 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Coins className="w-5 h-5 text-amber-400" />
+                <h3 className="font-bold text-base text-white">Kelola Saldo Cash (RDN)</h3>
+              </div>
+              <button onClick={() => setIsCashModalOpen(false)} className="p-1 text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCash} className="p-5 space-y-4">
+              
+              {/* Opsi Mode Aksi Cash */}
+              <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => { setCashAction('SET'); setCashInput(String(cashBalance)); }}
+                  className={`py-1.5 rounded-lg transition ${cashAction === 'SET' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Set Saldo
                 </button>
-                <button type="submit" className="px-5 py-2 bg-amber-600 text-slate-950 font-bold text-xs rounded-xl">
-                  Simpan
+                <button
+                  type="button"
+                  onClick={() => { setCashAction('DEPOSIT'); setCashInput(''); }}
+                  className={`py-1.5 rounded-lg transition flex items-center justify-center gap-1 ${cashAction === 'DEPOSIT' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5" /> Top Up
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setCashAction('WITHDRAW'); setCashInput(''); }}
+                  className={`py-1.5 rounded-lg transition flex items-center justify-center gap-1 ${cashAction === 'WITHDRAW' ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <ArrowDownRight className="w-3.5 h-3.5" /> Tarik Cash
                 </button>
               </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  {cashAction === 'SET' && 'Masukkan Total Saldo Cash Saat Ini (Rp)'}
+                  {cashAction === 'DEPOSIT' && 'Nominal Top Up / Tambah Modal (Rp)'}
+                  {cashAction === 'WITHDRAW' && 'Nominal Penarikan Dana RDN (Rp)'}
+                </label>
+                <input
+                  type="number"
+                  value={cashInput}
+                  onChange={(e) => setCashInput(e.target.value)}
+                  placeholder="0"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-amber-300 font-black text-base focus:outline-none focus:border-amber-500"
+                  required
+                />
+              </div>
+
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+                <div className="flex justify-between">
+                  <span>Saldo Cash Saat Ini:</span>
+                  <strong className="text-amber-300">Rp {cashBalance.toLocaleString('id-ID')}</strong>
+                </div>
+                {cashInput && cashAction !== 'SET' && (
+                  <div className="flex justify-between pt-1 border-t border-slate-800/80">
+                    <span>Estimasi Saldo Baru:</span>
+                    <strong className="text-emerald-400">
+                      Rp { (cashAction === 'DEPOSIT' ? cashBalance + (parseFloat(cashInput) || 0) : Math.max(0, cashBalance - (parseFloat(cashInput) || 0))).toLocaleString('id-ID') }
+                    </strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button type="button" onClick={() => setIsCashModalOpen(false)} className="px-4 py-2 bg-slate-800 text-xs font-semibold rounded-xl text-slate-300">
+                  Batal
+                </button>
+                <button type="submit" className="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-xl shadow-lg">
+                  Simpan Perubahan
+                </button>
+              </div>
+
             </form>
+
           </div>
         </div>
       )}

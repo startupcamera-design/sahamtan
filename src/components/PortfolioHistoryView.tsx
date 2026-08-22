@@ -15,7 +15,8 @@ import {
   Calendar, 
   BarChart2, 
   Percent,
-  CheckCircle2
+  CheckCircle2,
+  Info
 } from 'lucide-react';
 
 export const PortfolioHistoryView: React.FC<{ refreshTrigger?: number }> = ({ refreshTrigger }) => {
@@ -171,10 +172,10 @@ export const PortfolioHistoryView: React.FC<{ refreshTrigger?: number }> = ({ re
               </div>
               <div>
                 <h3 className="font-bold text-sm sm:text-base text-white tracking-wide">
-                  Histori Pertumbuhan Equity
+                  Histori Pertumbuhan Equity & Profit Murni
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Grafik akumulasi modal + keuntungan terealisasi harian
+                  Perbandingan Modal Pokok (Indigo) vs Keuntungan Murni Trading (Hijau/Merah)
                 </p>
               </div>
             </div>
@@ -191,41 +192,92 @@ export const PortfolioHistoryView: React.FC<{ refreshTrigger?: number }> = ({ re
             )}
           </div>
 
-          {/* Visualisasi Bar Chart */}
-          <div className="space-y-2 pt-1">
-            <div className="h-32 flex items-end justify-between gap-1.5 pt-6 pb-1 px-2 bg-slate-950/80 rounded-xl border border-slate-800/80 overflow-x-auto custom-scrollbar">
+          {/* Visualisasi Bar Chart Stacked Dual Warna */}
+          <div className="space-y-3 pt-1">
+            <div className="h-40 flex items-end justify-between gap-1.5 pt-10 pb-1 px-2 bg-slate-950/80 rounded-xl border border-slate-800/80 overflow-x-auto custom-scrollbar">
               {history.map((item, idx) => {
-                const val = Number(item.total_current_value);
+                const totalVal = Number(item.total_current_value);
+                const capitalBase = Number(item.total_investment);
+                const profitRp = Number(item.floating_pl_rp);
+                const isProfit = profitRp >= 0;
+
                 const range = maxVal - minVal || 1;
-                const heightPct = Math.max(18, Math.round(((val - minVal) / range) * 80 + 20));
-                const isProfit = Number(item.floating_pl_rp) >= 0;
+                // Tinggi total batang relatif terhadap grafik
+                const heightPct = Math.max(20, Math.round(((totalVal - minVal) / range) * 70 + 30));
+
+                // Kalkulasi porsi persentase Modal Pokok vs Profit Murni dalam 1 batang
+                const capitalSharePct = totalVal > 0 ? Math.min(100, Math.max(10, (capitalBase / totalVal) * 100)) : 100;
+                const profitSharePct = Math.max(0, 100 - capitalSharePct);
 
                 return (
                   <div 
                     key={idx} 
-                    className="flex-1 flex flex-col items-center h-full justify-end group min-w-[14px] relative"
+                    className="flex-1 flex flex-col items-center h-full justify-end group min-w-[16px] relative"
                   >
-                    {/* Tooltip Hover */}
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-slate-800 text-slate-100 px-2.5 py-1.5 rounded-lg absolute -top-12 pointer-events-none whitespace-nowrap z-30 border border-slate-700 shadow-2xl">
-                      <div className="font-bold text-indigo-300">{item.snapshot_date}</div>
-                      <div>Nilai: Rp {val.toLocaleString('id-ID')}</div>
-                      <div className={isProfit ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
-                        P/L: {isProfit ? '+' : ''}Rp {Number(item.floating_pl_rp).toLocaleString('id-ID')}
+                    {/* Tooltip Hover Detail */}
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-slate-900 text-slate-100 p-2.5 rounded-xl absolute -top-20 pointer-events-none z-30 border border-slate-700 shadow-2xl space-y-1 min-w-[140px]">
+                      <div className="font-bold text-indigo-300 border-b border-slate-800 pb-1 flex justify-between items-center">
+                        <span>{item.snapshot_date}</span>
+                        <span className="text-[9px] text-slate-400">{item.stock_count} Saham</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Total Equity:</span>
+                        <strong className="text-white">Rp {totalVal.toLocaleString('id-ID')}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Modal Pokok:</span>
+                        <strong className="text-indigo-400">Rp {capitalBase.toLocaleString('id-ID')}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Profit Murni:</span>
+                        <strong className={isProfit ? 'text-emerald-400' : 'text-rose-400'}>
+                          {isProfit ? '+' : ''}Rp {profitRp.toLocaleString('id-ID')} ({item.floating_pl_pct}%)
+                        </strong>
                       </div>
                     </div>
 
-                    {/* Batang Visual */}
+                    {/* Stacked Bar (Dua Warna) */}
                     <div 
                       style={{ height: `${heightPct}%` }}
-                      className={`w-full rounded-t-md transition-all duration-300 group-hover:brightness-125 ${
-                        isProfit 
-                          ? 'bg-gradient-to-t from-emerald-600 to-teal-400 shadow-lg shadow-emerald-950/50' 
-                          : 'bg-gradient-to-t from-rose-600 to-amber-500 shadow-lg shadow-rose-950/50'
-                      }`} 
-                    />
+                      className="w-full rounded-t-md overflow-hidden flex flex-col justify-end transition-all duration-300 group-hover:brightness-125 shadow-md"
+                    >
+                      {/* BAGIAN ATAS: KEUNTUNGAN MURNI (Hijau) */}
+                      {isProfit && profitSharePct > 0 && (
+                        <div 
+                          style={{ height: `${profitSharePct}%` }}
+                          className="bg-emerald-400 w-full transition-all"
+                          title="Keuntungan Murni"
+                        />
+                      )}
+
+                      {/* BAGIAN BAWAH: MODAL POKOK (Indigo / Biru) atau MERAH JIKA LOSS */}
+                      <div 
+                        style={{ height: `${isProfit ? capitalSharePct : 100}%` }}
+                        className={`w-full transition-all ${
+                          isProfit ? 'bg-indigo-600' : 'bg-rose-500'
+                        }`}
+                        title="Modal Pokok"
+                      />
+                    </div>
                   </div>
                 );
               })}
+            </div>
+
+            {/* Keterangan Warna Grafik (Legend) */}
+            <div className="flex flex-wrap justify-center items-center gap-4 text-[10px] text-slate-400 pt-1 border-t border-slate-800/60">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm bg-indigo-600 inline-block" />
+                <span>Modal Pokok (Top-Up / Investment)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block" />
+                <span>Keuntungan Murni Trading (Profit)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 inline-block" />
+                <span>Kerugian (Loss)</span>
+              </div>
             </div>
 
             {/* Label Rentang Tanggal */}
@@ -244,7 +296,7 @@ export const PortfolioHistoryView: React.FC<{ refreshTrigger?: number }> = ({ re
           <BarChart2 className="w-8 h-8 text-slate-600 mx-auto" />
           <p className="text-xs text-slate-300 font-semibold">Histori Pertumbuhan Belum Tercatat</p>
           <p className="text-[11px] text-slate-500">
-            Klik tombol <strong>"📌 Simpan Histori Hari Ini"</strong> di atas untuk mulai merekam titik grafik pertama Anda.
+            Klik tombol <strong>"📌 Simpan Snapshot"</strong> di atas untuk mulai merekam titik grafik pertama Anda.
           </p>
         </div>
       )}

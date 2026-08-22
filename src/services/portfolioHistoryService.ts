@@ -2,10 +2,10 @@ import { supabase } from '../lib/supabase';
 
 export interface PortfolioSnapshot {
   snapshot_date: string;
-  total_investment: number;
-  total_current_value: number;
-  floating_pl_rp: number;
-  floating_pl_pct: number;
+  total_investment: number;    // Modal Pokok Aktual (Warna Modal)
+  total_current_value: number; // Total Nilai Aset (Saham Aktif + Cash)
+  floating_pl_rp: number;      // Profit/Loss Murni (Rp)
+  floating_pl_pct: number;     // Profit/Loss Murni (%)
   stock_count: number;
 }
 
@@ -19,10 +19,11 @@ export interface PortfolioWinRateStats {
 
 // A. Simpan snapshot nilai portofolio hari ini ke database
 export const saveDailyPortfolioSnapshot = async (summary: {
-  totalInvestment: number;
-  totalCurrentValue: number;
-  floatingPLRp: number;
-  floatingPLPct: number;
+  totalInvestment: number;      // Total modal pada saham aktif
+  totalCurrentValue: number;   // Nilai berjalan saham aktif
+  cashBalance?: number;        // Saldo cash aktif
+  floatingPLRp: number;        // Floating P/L saham aktif (Rp)
+  floatingPLPct?: number;
   stockCount: number;
 }) => {
   const today = new Date().toISOString().split('T')[0];
@@ -44,14 +45,20 @@ export const saveDailyPortfolioSnapshot = async (summary: {
     });
   }
 
-  // 2. Akumulasikan Nilai Portofolio Sebenarnya:
-  // Nilai Riil = Total Nilai Saham Aktif Sekarang + Profit Terealisasi Dari Penjualan
-  const netTotalCurrentValue = summary.totalCurrentValue + totalRealizedPLRp;
-  const netTotalPLRp = summary.floatingPLRp + totalRealizedPLRp;
+  // 2. KALKULASI MURNI:
+  // - Net Profit Murni (Rp) = Floating P/L Saham Aktif + Realized Profit Penjualan
+  const netProfitRp = summary.floatingPLRp + totalRealizedPLRp;
   
-  // Menghitung % Net Growth Portofolio dari modal awal
-  const baseInvestment = summary.totalInvestment > 0 ? summary.totalInvestment : 1;
-  const netTotalPLPct = Number(((netTotalPLRp / baseInvestment) * 100).toFixed(2));
+  // - Total Nilai Aset Portofolio = Nilai Saham Aktif + Saldo Cash
+  const activeCash = summary.cashBalance || 0;
+  const netTotalPortfolioValue = summary.totalCurrentValue + activeCash;
+
+  // - Total Modal Pokok Aktual = Total Aset - Net Profit
+  // (Mengisolasi top-up modal agar tidak terhitung sebagai keuntungan)
+  const netCapitalBase = Math.max(1, netTotalPortfolioValue - netProfitRp);
+  
+  // - % Return Murni Trading
+  const pureReturnPct = Number(((netProfitRp / netCapitalBase) * 100).toFixed(2));
 
   // 3. Simpan / Perbarui Snapshot Hari Ini (UPSERT)
   const { error } = await supabase
@@ -59,10 +66,10 @@ export const saveDailyPortfolioSnapshot = async (summary: {
     .upsert(
       {
         snapshot_date: today,
-        total_investment: summary.totalInvestment,
-        total_current_value: netTotalCurrentValue,
-        floating_pl_rp: netTotalPLRp,
-        floating_pl_pct: netTotalPLPct,
+        total_investment: netCapitalBase,          // Menyimpan Modal Pokok Murni
+        total_current_value: netTotalPortfolioValue, // Menyimpan Total Aset (Saham + Cash)
+        floating_pl_rp: netProfitRp,                 // Menyimpan Total Profit Murni (Rp)
+        floating_pl_pct: pureReturnPct,              // Menyimpan % Return Murni
         stock_count: summary.stockCount,
       },
       { onConflict: 'snapshot_date' }
@@ -70,10 +77,11 @@ export const saveDailyPortfolioSnapshot = async (summary: {
 
   if (error) {
     console.error('Gagal menyimpan snapshot histori portofolio:', error);
+    throw new Error(error.message);
   }
 };
 
-// B. Ambil data histori portofolio (30 hari terakhir)
+// B. Ambil data histori portofolio (30 snapshot terakhir)
 export const fetchPortfolioHistory = async (): Promise<PortfolioSnapshot[]> => {
   const { data, error } = await supabase
     .from('portfolio_history')
