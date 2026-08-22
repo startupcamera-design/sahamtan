@@ -171,98 +171,72 @@ export const StockScreener: React.FC = () => {
   const [selectedStock, setSelectedStock] = useState<ScreenerResult | null>(null);
   const [selectedChartStock, setSelectedChartStock] = useState<ScreenerResult | null>(null);
 
-  const handleRunScreener = async () => {
-    setLoading(true);
-    setHasRun(true);
-    try {
-      const { data, error } = await supabase.rpc('run_pullback_screener', {
-        p_lookback_days: lookbackDays,
-        p_max_dist_pct: maxDistPct / 100,
-        p_min_volume: minVolume,
-      });
+const handleRunScreener = async () => {
+  setLoading(true);
+  setHasRun(true);
+  try {
+    // 1. Jalankan RPC Screener
+    const { data, error } = await supabase.rpc('run_pullback_screener', {
+      p_lookback_days: lookbackDays,
+      p_max_dist_pct: maxDistPct / 100,
+      p_min_volume: minVolume,
+    });
 
-      if (error) throw error;
+    if (error) throw error;
 
-      const latestDate = data && data.length > 0 ? data[0].last_date : null;
+    const latestDate = data && data.length > 0 ? data[0].last_date : null;
 
-      let aiCacheMap: Record<string, { score: number; action: string; tradingPlan: TradingPlan | null; text: string }> = {};
-      if (latestDate) {
-        const caches = await fetchLatestAICaches(latestDate);
-        caches.forEach((c: any) => {
-          let plan: TradingPlan | null = null;
-          if (c.trading_plan) {
-            plan = typeof c.trading_plan === 'string' ? JSON.parse(c.trading_plan) : c.trading_plan;
-          }
-          aiCacheMap[c.ticker] = {
-            score: c.ai_score,
-            action: c.action_recommendation,
-            tradingPlan: plan,
-            text: c.analysis_text,
-          };
-        });
-      }
-
-      const tickers = (data || []).map((row: any) => row.ticker);
-      let supertrendMap: Record<string, 'green' | 'red'> = {};
-
-      if (tickers.length > 0 && latestDate) {
-        const dateLimit = new Date(new Date(latestDate).getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-        const { data: priceHist } = await supabase
-          .from('daily_stock_prices')
-          .select('ticker, date, high, low, close')
-          .in('ticker', tickers)
-          .gte('date', dateLimit)
-          .order('date', { ascending: true });
-
-        if (priceHist) {
-          const grouped: Record<string, Array<{ close: number; high: number; low: number }>> = {};
-          priceHist.forEach((p) => {
-            if (!grouped[p.ticker]) grouped[p.ticker] = [];
-            grouped[p.ticker].push({
-              close: Number(p.close),
-              high: Number(p.high),
-              low: Number(p.low),
-            });
-          });
-
-          Object.keys(grouped).forEach((t) => {
-            supertrendMap[t] = getLatestSuperTrendStatus(grouped[t], 10, 1.5);
-          });
+    // 2. Fetch cache AI jika ada
+    let aiCacheMap: Record<string, { score: number; action: string; tradingPlan: TradingPlan | null; text: string; supertrend: 'green' | 'red' }> = {};
+    if (latestDate) {
+      const caches = await fetchLatestAICaches(latestDate);
+      caches.forEach((c: any) => {
+        let plan: TradingPlan | null = null;
+        if (c.trading_plan) {
+          plan = typeof c.trading_plan === 'string' ? JSON.parse(c.trading_plan) : c.trading_plan;
         }
-      }
-
-      const formattedResults: ScreenerResult[] = (data || []).map((row: any) => {
-        const cached = aiCacheMap[row.ticker];
-        return {
-          ticker: row.ticker,
-          lastDate: row.last_date,
-          closePrice: Number(row.close_price),
-          ma50: Number(row.ma50),
-          distToMA50Pct: Number(row.dist_to_ma50_pct),
-          volume: Number(row.volume),
-          avgVolume20: Number(row.avg_volume_20),
-          isPullbackHealthy: true,
-          supertrendStatus: supertrendMap[row.ticker] || 'green',
-          aiScore: cached?.score,
-          aiAction: cached?.action,
-          tradingPlan: cached?.tradingPlan,
-          aiMarkdown: cached?.text,
+        aiCacheMap[c.ticker] = {
+          score: c.ai_score,
+          action: c.action_recommendation,
+          tradingPlan: plan,
+          text: c.analysis_text,
+          supertrend: c.supertrend_status || 'green',
         };
       });
-
-      formattedResults.sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
-      setResults(formattedResults);
-
-      if (window.innerWidth < 768) {
-        setShowFilterMobile(false);
-      }
-    } catch (err: any) {
-      console.error('Screener Error:', err.message || err);
-    } finally {
-      setLoading(false);
     }
-  };
+
+    // 3. Format Hasil Screener (Supertrend & Volume langsung otomatis tersedia dari DB/Cache)
+    const formattedResults: ScreenerResult[] = (data || []).map((row: any) => {
+      const cached = aiCacheMap[row.ticker];
+      return {
+        ticker: row.ticker,
+        lastDate: row.last_date,
+        closePrice: Number(row.close_price),
+        ma50: Number(row.ma50),
+        distToMA50Pct: Number(row.dist_to_ma50_pct),
+        volume: Number(row.volume),
+        avgVolume20: Number(row.avg_volume_20),
+        isPullbackHealthy: true,
+        supertrendStatus: cached?.supertrend || (row.supertrend_status as 'green' | 'red') || 'green',
+        aiScore: cached?.score,
+        aiAction: cached?.action,
+        tradingPlan: cached?.tradingPlan,
+        aiMarkdown: cached?.text,
+      };
+    });
+
+    formattedResults.sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
+    setResults(formattedResults);
+
+    if (window.innerWidth < 768) {
+      setShowFilterMobile(false);
+    }
+  } catch (err: any) {
+    console.error('Screener Error:', err.message || err);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleAnalyzeAI = async (stock: ScreenerResult): Promise<{ res: ScreenerResult | null; modelUsed: string }> => {
     setResults((prev) =>

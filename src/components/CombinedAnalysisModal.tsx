@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   createChart,
   ColorType,
@@ -145,6 +146,14 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Kunci Scroll Body saat Modal Aktif
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
   useEffect(() => {
     let chart: IChartApi | null = null;
     let resizeObserver: ResizeObserver | null = null;
@@ -154,7 +163,6 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
       setErrorMsg(null);
 
       try {
-        // OPTIMASI EGRESS: Ambil 180 baris data terbaru (cukup untuk 8-9 bulan hari bursa)
         const { data, error } = await supabase
           .from('daily_stock_prices')
           .select('date, open, high, low, close, volume')
@@ -174,7 +182,7 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
         chartContainerRef.current.innerHTML = '';
 
         const isMobile = window.innerWidth < 768;
-        const chartHeight = isMobile ? 310 : 480;
+        const chartHeight = isMobile ? 320 : 480;
 
         chart = createChart(chartContainerRef.current, {
           layout: {
@@ -185,7 +193,7 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
             vertLines: { color: '#1e293b' },
             horzLines: { color: '#1e293b' },
           },
-          width: chartContainerRef.current.clientWidth,
+          width: chartContainerRef.current.clientWidth || 300,
           height: chartHeight,
           timeScale: {
             borderColor: '#334155',
@@ -250,12 +258,11 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
 
         supertrendSeries.setData(supertrendData);
 
-        // Pengecekan Aman (Safe Call) setMarkers
         if (markers.length > 0 && typeof (candlestickSeries as any).setMarkers === 'function') {
           (candlestickSeries as any).setMarkers(markers);
         }
 
-        // 4. GARIS TRADING PLAN (ENTRY, SL, TP1, TP2)
+        // 4. Garis Trading Plan
         const tp = stock.tradingPlan;
         if (tp) {
           const entryArea = tp.entry_area || (tp as any).entryArea;
@@ -337,9 +344,14 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
     };
   }, [stock]);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-7xl rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[92vh]">
+  const modalMarkup = (
+    <div className="fixed inset-0 z-[999999] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+      
+      {/* Backdrop */}
+      <div className="absolute inset-0" onClick={onClose} />
+
+      {/* Kontainer Modal Utama */}
+      <div className="relative z-10 bg-slate-900 border border-slate-800 w-full max-w-7xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-slate-200">
         
         {/* Header Modal */}
         <div className="px-4 sm:px-6 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950 shrink-0">
@@ -359,12 +371,12 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
         </div>
 
         {/* Body Split Container */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 flex-1 overflow-y-auto lg:overflow-hidden divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
+        <div className="grid grid-cols-1 lg:grid-cols-12 flex-1 overflow-y-auto lg:overflow-hidden divide-y lg:divide-y-0 lg:divide-x divide-slate-800 custom-scrollbar">
           
           {/* KOLOM KIRI: GRAFIK */}
           <div className="lg:col-span-7 p-3 sm:p-4 relative bg-slate-950/60 flex flex-col justify-center min-h-[340px] sm:min-h-[480px]">
             
-            {/* Legend Mobile / Summary Badge Bar (Khusus HP) */}
+            {/* Summary Badge Bar (Mobile) */}
             {(stock.aiScore || stock.aiAction || stock.tradingPlan) && (
               <div className="block lg:hidden mb-2 bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between">
@@ -408,7 +420,7 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
               </div>
             )}
 
-            {/* Legend Desktop Floating Overlay (Khusus Desktop) */}
+            {/* Overlay Desktop Legend */}
             {(stock.aiScore || stock.aiAction || stock.tradingPlan) && (
               <div className="hidden lg:block absolute top-6 left-6 z-10 pointer-events-none">
                 <div className="pointer-events-auto bg-slate-900/90 border border-slate-800 rounded-xl p-3 shadow-xl backdrop-blur-md max-w-xs space-y-2 text-xs">
@@ -477,12 +489,12 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
               </div>
             )}
 
-            {/* Container Grafik */}
-            <div ref={chartContainerRef} className="w-full h-[310px] sm:h-[480px]" />
+            {/* Ref Container Grafik */}
+            <div ref={chartContainerRef} className="w-full h-[320px] sm:h-[480px]" />
           </div>
 
           {/* KOLOM KANAN: LAPORAN AI */}
-          <div className="lg:col-span-5 p-4 sm:p-5 overflow-y-auto bg-slate-900/40 max-h-[400px] lg:max-h-[580px]">
+          <div className="lg:col-span-5 p-4 sm:p-5 overflow-y-auto bg-slate-900/40 max-h-[400px] lg:max-h-[580px] custom-scrollbar">
             <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800">
               <BookOpen className="w-4 h-4 text-emerald-400" />
               <h4 className="text-xs sm:text-sm font-bold text-slate-200">Narasi Analisis AI</h4>
@@ -515,4 +527,6 @@ export const CombinedAnalysisModal: React.FC<CombinedAnalysisModalProps> = ({ st
       </div>
     </div>
   );
+
+  return createPortal(modalMarkup, document.body);
 };

@@ -8,9 +8,17 @@ import {
   type CategoryWinRate 
 } from '../services/aiBacktestService';
 import { 
+  getTop10ByWinRateHistory, 
+  type CandidateWithWinRateScore 
+} from '../services/historicalEngine';
+import { type TradingPlan } from '../services/aiService';
+import { AIAnalysisViewer } from './AIAnalysisViewer';
+import { CombinedAnalysisModal } from './CombinedAnalysisModal';
+import { 
   Award, RefreshCw, Target, ShieldAlert, Clock, Sparkles, 
   ChevronDown, ChevronUp, ShieldX, Bookmark, X, 
-  TrendingUp, AlertTriangle, CheckCircle2, BarChart2 
+  TrendingUp, AlertTriangle, CheckCircle2, BarChart2, Flame,
+  Bot, LineChart
 } from 'lucide-react';
 
 // Interfaces
@@ -22,14 +30,7 @@ export interface AIAnalysisCacheItem {
   action_recommendation: string;
   analysis_text: string;
   created_at: string;
-  trading_plan: {
-    status?: string;
-    rr_ratio?: string;
-    stop_loss?: string | number;
-    entry_area?: string;
-    target_price_1?: string | number;
-    target_price_2?: string | number;
-  } | null;
+  trading_plan: TradingPlan | null;
   result_status: 'PENDING' | 'HIT_TP1' | 'HIT_TP2' | 'HIT_SL' | string;
   max_price_reached: number | null;
   min_price_reached: number | null;
@@ -38,14 +39,55 @@ export interface AIAnalysisCacheItem {
 }
 
 export interface ScoreRangeStat {
-  rangeLabel: string; // Misal: "81-90"
-  minScore: number;   // 81
-  maxScore: number;   // 90
+  rangeLabel: string;
+  minScore: number;
+  maxScore: number;
   total: number;
   winRatePct: number;
   hitTP: number;
   hitSL: number;
   pending: number;
+}
+
+// Helper persentase SL & TP yang Aman (Safe Parser)
+function getPctBadge(
+  targetStr?: string | number | null, 
+  entryStr?: string | number | null, 
+  fallbackPrice?: number
+): { text: string; isPositive: boolean } | null {
+  if (!targetStr) return null;
+
+  const parseNum = (val: string | number | null | undefined): number | null => {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'number') return val > 0 ? val : null;
+    
+    const str = String(val).trim();
+    if (!str) return null;
+
+    const matches = str.match(/\d+(?:[.,]\d+)?/g);
+    if (!matches || matches.length === 0) return null;
+
+    const nums = matches.map((m) => {
+      let clean = m.replace(/,/g, '');
+      return parseFloat(clean);
+    }).filter(n => !isNaN(n) && n > 0);
+
+    if (nums.length === 0) return null;
+    return nums.reduce((a, b) => a + b, 0) / nums.length;
+  };
+
+  const entryPrice = parseNum(entryStr) || fallbackPrice;
+  const targetPrice = parseNum(targetStr);
+
+  if (!entryPrice || !targetPrice || entryPrice === 0) return null;
+
+  const pct = ((targetPrice - entryPrice) / entryPrice) * 100;
+  const formatted = Math.abs(pct).toFixed(1) + '%';
+
+  return {
+    text: pct >= 0 ? `+${formatted}` : `-${formatted}`,
+    isPositive: pct >= 0,
+  };
 }
 
 export const AIWinRateBadge: React.FC = () => {
@@ -55,12 +97,21 @@ export const AIWinRateBadge: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
 
-  // State untuk Modal Detail
+  // State Modal Detail Standar
   const [modalTitle, setModalTitle] = useState<string | null>(null);
   const [modalItems, setModalItems] = useState<AIAnalysisCacheItem[]>([]);
   const [loadingModal, setLoadingModal] = useState(false);
 
-  // Load awal & kalkulasi statistik AI Score Range (0-100)
+  // State Modal Top 10 Win Rate Engine
+  const [top10List, setTop10List] = useState<CandidateWithWinRateScore[]>([]);
+  const [showTop10Modal, setShowTop10Modal] = useState(false);
+  const [loadingTop10, setLoadingTop10] = useState(false);
+
+  // State Modal AI Viewer & Chart Modal
+  const [selectedStockForAi, setSelectedStockForAi] = useState<{ ticker: string; aiMarkdown: string; tradingPlan?: TradingPlan | null; closePrice?: number } | null>(null);
+  const [selectedChartStock, setSelectedChartStock] = useState<any | null>(null);
+
+  // Load statistik awal
   const fetchStatsOnly = async () => {
     try {
       const data = await getAIWinRateStats();
@@ -123,13 +174,36 @@ export const AIWinRateBadge: React.FC = () => {
     }
   };
 
+  // Panggil Engine Top 10
+  const handleTestTop10 = async () => {
+    setShowTop10Modal(true);
+    setLoadingTop10(true);
+    try {
+      const { data: latestRow } = await supabase
+        .from('ai_analysis_cache')
+        .select('date')
+        .eq('result_status', 'PENDING')
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const targetDate = latestRow?.date || '2026-08-19';
+      const results = await getTop10ByWinRateHistory(targetDate);
+      setTop10List(results);
+    } catch (err) {
+      console.error('Gagal memproses Top 10 Win Rate:', err);
+      setTop10List([]);
+    } finally {
+      setLoadingTop10(false);
+    }
+  };
+
   useEffect(() => {
     fetchStatsOnly();
   }, []);
 
-  // Helper Warna Badge Kategori
   const getActionBadge = (action: string) => {
-    const act = action.toUpperCase();
+    const act = (action || '').toUpperCase();
     if (act.includes('STRONG BUY')) return { bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400', label: 'STRONG BUY' };
     if (act.includes('BUY ON SUPPORT')) return { bg: 'bg-amber-500/10 border-amber-500/30 text-amber-400', label: 'BUY ON SUPPORT' };
     if (act.includes('WATCHLIST')) return { bg: 'bg-purple-500/10 border-purple-500/30 text-purple-400', label: 'WATCHLIST' };
@@ -137,7 +211,6 @@ export const AIWinRateBadge: React.FC = () => {
     return { bg: 'bg-rose-500/10 border-rose-500/30 text-rose-400', label: 'AVOID / HIGH RISK' };
   };
 
-  // Helper Warna Rentang Skor
   const getScoreRangeColor = (winRate: number, total: number) => {
     if (total === 0) return 'border-slate-800 text-slate-500 bg-slate-950/40';
     if (winRate >= 70) return 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10';
@@ -145,7 +218,6 @@ export const AIWinRateBadge: React.FC = () => {
     return 'border-rose-500/40 text-rose-400 bg-rose-500/10';
   };
 
-  // Loader Data Modal dengan Urutan Status: PENDING -> HIT_TP2 -> HIT_TP1 -> HIT_SL
   const loadModalData = async (
     filterTitle: string, 
     filterQuery: (builder: any) => any
@@ -153,10 +225,7 @@ export const AIWinRateBadge: React.FC = () => {
     setModalTitle(filterTitle);
     setLoadingModal(true);
     try {
-      let query = supabase
-        .from('ai_analysis_cache')
-        .select('*');
-
+      let query = supabase.from('ai_analysis_cache').select('*');
       query = filterQuery(query);
 
       const { data: cacheData, error: cacheError } = await query;
@@ -222,7 +291,6 @@ export const AIWinRateBadge: React.FC = () => {
         };
       });
 
-      // PENGURUTAN KUSTOM: PENDING -> HIT_TP2 -> HIT_TP1 -> HIT_SL (Lalu berdasarkan tanggal terbaru)
       const statusOrderPriority: Record<string, number> = {
         'PENDING': 1,
         'HIT_TP2': 2,
@@ -238,7 +306,6 @@ export const AIWinRateBadge: React.FC = () => {
           return priorityA - priorityB;
         }
 
-        // Urutkan tanggal menurun jika statusnya sama
         return new Date(b.date).getTime() - new Date(a.date).getTime();
       });
 
@@ -307,8 +374,6 @@ export const AIWinRateBadge: React.FC = () => {
       
       {/* HEADER BARIS UTAMA */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        
-        {/* Sisi Kiri: Win Rate Utama */}
         <div className="flex items-center space-x-3.5">
           <div className="p-3 bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 text-emerald-400 rounded-2xl shrink-0 shadow-inner">
             <Award className="w-6 h-6" />
@@ -331,7 +396,7 @@ export const AIWinRateBadge: React.FC = () => {
           </div>
         </div>
 
-        {/* Sisi Kanan: Stat Ringkas */}
+        {/* Sisi Kanan: Stat Ringkas & Tombol Top 10 Win Rate */}
         <div className="flex items-center justify-between sm:justify-end space-x-2 sm:space-x-3 text-xs border-t sm:border-t-0 border-slate-800/80 pt-3 sm:pt-0">
           
           <div className="flex items-center space-x-1.5 bg-slate-950/60 border border-slate-800 px-2.5 py-1.5 rounded-xl">
@@ -358,10 +423,19 @@ export const AIWinRateBadge: React.FC = () => {
             </div>
           </div>
 
+          {/* TOMBOL TOP 10 WIN RATE */}
+          <button
+            onClick={handleTestTop10}
+            className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-lg shadow-emerald-950/50 transition active:scale-95 cursor-pointer shrink-0 border border-emerald-400/30"
+            title="Saring 100+ Saham PENDING Hari Ini Menjadi Top 10 Berdasarkan Win Rate Historis"
+          >
+            <Flame className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+            <span>Top 10 Win Rate</span>
+          </button>
+
           <button
             onClick={() => setShowBreakdown(!showBreakdown)}
             className="px-2.5 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl flex items-center gap-1 font-semibold transition active:scale-95 cursor-pointer shrink-0"
-            title="Lihat Perbedaan Win Rate per Tipe Rekomendasi & AI Score"
           >
             <span>Detail</span>
             {showBreakdown ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -371,7 +445,6 @@ export const AIWinRateBadge: React.FC = () => {
             onClick={handleFullEvaluation}
             disabled={isRefreshing}
             className="p-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer disabled:opacity-50 shrink-0"
-            title="Jalankan Evaluasi Backtest Ulang"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-indigo-400' : ''}`} />
           </button>
@@ -382,8 +455,6 @@ export const AIWinRateBadge: React.FC = () => {
       {/* EXPANDABLE SECTION */}
       {showBreakdown && (
         <div className="pt-3 border-t border-slate-800/80 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
-          
-          {/* SECTION 1: PERBANDINGAN PER JENIS REKOMENDASI */}
           {stats.breakdown && stats.breakdown.length > 0 && (
             <div>
               <div className="text-[11px] font-semibold text-slate-400 mb-2 flex items-center justify-between">
@@ -440,7 +511,6 @@ export const AIWinRateBadge: React.FC = () => {
             </div>
           )}
 
-          {/* SECTION 2: RENTANG SKOR AI */}
           <div>
             <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
               <div className="flex items-center space-x-1.5">
@@ -460,7 +530,6 @@ export const AIWinRateBadge: React.FC = () => {
                     onClick={() => range.total > 0 && handleOpenScoreRangeModal(range)}
                     disabled={range.total === 0}
                     className={`shrink-0 flex items-center space-x-2.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800/80 ${colorClass}`}
-                    title={`Klik untuk lihat ${range.total} saham dengan skor ${range.rangeLabel}`}
                   >
                     <span className="text-[11px] text-slate-300 font-bold bg-slate-900/80 border border-slate-800 px-1.5 py-0.5 rounded-md">
                       {range.rangeLabel}
@@ -479,11 +548,10 @@ export const AIWinRateBadge: React.FC = () => {
               })}
             </div>
           </div>
-
         </div>
       )}
 
-      {/* MODAL LIST DETAIL SAHAM */}
+      {/* MODAL LIST DETAIL SAHAM STANDAR */}
       {modalTitle && (
         <AIStockDetailModal 
           title={modalTitle} 
@@ -493,11 +561,317 @@ export const AIWinRateBadge: React.FC = () => {
         />
       )}
 
+      {/* MODAL HASIL TOP 10 WIN RATE LENGKAP ANALISIS AI */}
+      {showTop10Modal && (
+        <Top10WinRateModal 
+          items={top10List} 
+          loading={loadingTop10} 
+          onClose={() => setShowTop10Modal(false)}
+          onOpenAiViewer={(ticker, aiMarkdown, tradingPlan) => {
+            setSelectedStockForAi({ ticker, aiMarkdown, tradingPlan });
+          }}
+          onOpenChart={(stock) => {
+            setSelectedChartStock(stock);
+          }}
+        />
+      )}
+
+      {/* MODAL LAPORAN AI MARKDOWN VIEWER */}
+      {selectedStockForAi &&
+        createPortal(
+          <div className="fixed inset-0 z-[999999] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+            <div 
+              className="absolute inset-0" 
+              onClick={() => setSelectedStockForAi(null)} 
+            />
+
+            <div className="relative z-10 bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col text-slate-200">
+              <div className="px-4 sm:px-6 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950 shrink-0">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-emerald-400" />
+                  <h3 className="text-base sm:text-lg font-bold text-slate-100">
+                    Laporan AI: <span className="text-emerald-400">{selectedStockForAi.ticker}</span>
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedStockForAi(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {selectedStockForAi.tradingPlan && (() => {
+                const plan = selectedStockForAi.tradingPlan;
+                const slPct = getPctBadge(plan.stop_loss, plan.entry_area);
+                const tp1Pct = getPctBadge(plan.target_price_1, plan.entry_area);
+
+                return (
+                  <div className="bg-slate-950/80 border-b border-slate-800 p-3 sm:p-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs shrink-0">
+                    <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                      <span className="text-slate-400 block text-[10px]">ENTRY AREA</span>
+                      <span className="font-bold text-emerald-400">{plan.entry_area}</span>
+                    </div>
+
+                    <div className="bg-slate-900 p-2 rounded-xl border border-slate-800 flex justify-between items-end">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">STOP LOSS (SL)</span>
+                        <span className="font-bold text-rose-400">{plan.stop_loss}</span>
+                      </div>
+                      {slPct && <span className="text-[10px] font-bold text-rose-400 bg-rose-950 px-1 rounded border border-rose-800">{slPct.text}</span>}
+                    </div>
+
+                    <div className="bg-slate-900 p-2 rounded-xl border border-slate-800 flex justify-between items-end">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">TARGET PRICE 1</span>
+                        <span className="font-bold text-sky-400">{plan.target_price_1}</span>
+                      </div>
+                      {tp1Pct && <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950 px-1 rounded border border-emerald-800">{tp1Pct.text}</span>}
+                    </div>
+
+                    <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                      <span className="text-slate-400 block text-[10px]">R:R RATIO</span>
+                      <span className="font-bold text-teal-300">{plan.rr_ratio}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="p-4 sm:p-6 overflow-y-auto space-y-4 custom-scrollbar flex-1">
+                <AIAnalysisViewer content={selectedStockForAi.aiMarkdown} />
+              </div>
+
+              <div className="px-4 sm:px-6 py-3 border-t border-slate-800 bg-slate-950 flex justify-end shrink-0">
+                <button
+                  onClick={() => setSelectedStockForAi(null)}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                >
+                  Tutup Laporan
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL COMBINED CHART */}
+      {selectedChartStock && (
+        <CombinedAnalysisModal
+          stock={selectedChartStock}
+          onClose={() => setSelectedChartStock(null)}
+        />
+      )}
+
     </div>
   );
 };
 
-// COMPONENT MODAL DETAIL SAHAM PER KATEGORI/SKOR
+// COMPONENT MODAL DEDIKASI TOP 10 WIN RATE DENGAN INTEGRASI ANALISIS AI LENGKAP (5 PILAR)
+const Top10WinRateModal: React.FC<{
+  items: CandidateWithWinRateScore[];
+  loading: boolean;
+  onClose: () => void;
+  onOpenAiViewer: (ticker: string, aiMarkdown: string, tradingPlan?: TradingPlan | null) => void;
+  onOpenChart: (stock: any) => void;
+}> = ({ items, loading, onClose, onOpenAiViewer, onOpenChart }) => {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+      <div className="absolute inset-0" onClick={onClose} />
+
+      <div className="relative z-10 bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden text-slate-200">
+        
+        {/* Modal Header */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+          <div className="flex items-center space-x-2">
+            <Flame className="w-5 h-5 text-amber-400" />
+            <h3 className="font-bold text-base text-white">
+              Saringan AI Win Rate: <span className="text-emerald-400">Top 10 Probability TP (Historis 5 Pilar)</span>
+            </h3>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Modal Body */}
+        <div className="p-4 overflow-y-auto space-y-3.5 flex-1 custom-scrollbar">
+          {loading ? (
+            <div className="py-12 text-center text-slate-400 space-y-3">
+              <RefreshCw className="w-8 h-8 animate-spin mx-auto text-emerald-400" />
+              <p className="text-xs">Mengkalkulasi matriks Win Rate 5 pilar historis & menyaring 100+ saham...</p>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 text-xs">
+              Tidak ada saham berstatus PENDING ditemukan untuk tanggal bursa terbaru.
+            </div>
+          ) : (
+            items.map((item, index) => {
+              let plan: TradingPlan | null = null;
+              if (item.trading_plan) {
+                plan = typeof item.trading_plan === 'string' 
+                  ? JSON.parse(item.trading_plan) 
+                  : item.trading_plan;
+              }
+
+              const slPct = getPctBadge(plan?.stop_loss, plan?.entry_area);
+              const tp1Pct = getPctBadge(plan?.target_price_1, plan?.entry_area);
+
+              return (
+                <div 
+                  key={item.id} 
+                  className="bg-slate-950/80 border border-slate-800 p-3.5 rounded-xl space-y-3 hover:border-slate-700 transition"
+                >
+                  {/* Baris Atas Header Kartu */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-black text-xs flex items-center justify-center">
+                        #{index + 1}
+                      </span>
+                      <strong className="text-lg text-white font-extrabold">{item.ticker}</strong>
+                      <span className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                        {item.date}
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
+                        Raw AI Score: {item.ai_score}
+                      </span>
+                      {item.action_recommendation && (
+                        <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                          {item.action_recommendation}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onOpenChart({
+                          ticker: item.ticker,
+                          lastDate: item.date,
+                          closePrice: 0,
+                          ma50: 0,
+                          distToMA50Pct: 0,
+                          volume: 0,
+                          avgVolume20: 0,
+                          isPullbackHealthy: true,
+                          supertrendStatus: item.supertrend_status,
+                          aiScore: item.ai_score,
+                          aiAction: item.action_recommendation,
+                          tradingPlan: plan,
+                          aiMarkdown: item.analysis_text
+                        })}
+                        title="Lihat Chart & Analisis"
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-emerald-600 text-slate-300 hover:text-white border border-slate-700 transition-colors"
+                      >
+                        <LineChart className="w-4 h-4" />
+                      </button>
+
+                      <div className="text-right pl-2 border-l border-slate-800">
+                        <span className="text-[10px] text-slate-400 block">TP Win Rate Prob</span>
+                        <span className="text-lg font-black text-emerald-400">
+                          {item.historicalProbabilityScore}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Grid Ringkasan Trading Plan (Jika Ada Data Analisis AI) */}
+                  {plan && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block">Entry Area</span>
+                        <strong className="text-emerald-400">{plan.entry_area || '-'}</strong>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block">Stop Loss (SL)</span>
+                        <div className="flex items-center gap-1">
+                          <strong className="text-rose-400">{plan.stop_loss || '-'}</strong>
+                          {slPct && <span className="text-[9px] font-bold text-rose-400 bg-rose-950 px-1 rounded border border-rose-800">{slPct.text}</span>}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block">Target Price 1 (TP1)</span>
+                        <div className="flex items-center gap-1">
+                          <strong className="text-sky-400">{plan.target_price_1 || '-'}</strong>
+                          {tp1Pct && <span className="text-[9px] font-bold text-emerald-400 bg-emerald-950 px-1 rounded border border-emerald-800">{tp1Pct.text}</span>}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block">Risk to Reward</span>
+                        <strong className="text-amber-400">{plan.rr_ratio || '-'}</strong>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Breakdown Win Rate Matriks (5 Pilar) */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] pt-1 text-slate-400">
+                    <div>
+                      <span className="block text-slate-500">WR Score ({item.ai_score}):</span>
+                      <strong className="text-slate-200">{item.breakdownWR.scoreWR}%</strong>
+                    </div>
+
+                    <div>
+                      <span className="block text-slate-500">WR SuperTrend ({item.supertrend_status}):</span>
+                      <strong className={item.supertrend_status === 'green' ? 'text-emerald-400' : 'text-rose-400'}>
+                        {item.breakdownWR.supertrendWR}%
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="block text-slate-500">WR Action ({item.action_recommendation}):</span>
+                      <strong className="text-slate-200">{item.breakdownWR.actionWR}%</strong>
+                    </div>
+
+                    {/* PILAR BARU: Volume Ratio & Tier */}
+                    <div>
+                      <span className="block text-slate-500">
+                        WR Vol ({item.volume_ratio ? `${item.volume_ratio}x` : 'Norm'}):
+                      </span>
+                      <strong className="text-amber-400">
+                        {item.breakdownWR.volumeWR ?? 50}%
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="block text-slate-500">WR Price Tier:</span>
+                      <strong className="text-slate-200">{item.breakdownWR.pennyWR}%</strong>
+                    </div>
+                  </div>
+
+                  {/* Tombol Lihat Laporan AI Lengkap */}
+                  {item.analysis_text && (
+                    <div className="pt-2 border-t border-slate-800/80 flex justify-end">
+                      <button
+                        onClick={() => onOpenAiViewer(item.ticker, item.analysis_text, plan)}
+                        className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                      >
+                        <Bot className="w-3.5 h-3.5" />
+                        <span>Buka Analisis AI Lengkap</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+
+  return createPortal(modalContent, document.body);
+};
+
+// COMPONENT MODAL DETAIL SAHAM STANDAR PER KATEGORI/SKOR
 interface ModalProps {
   title: string;
   items: AIAnalysisCacheItem[];
@@ -515,7 +889,6 @@ const AIStockDetailModal: React.FC<ModalProps> = ({ title, items, loading, onClo
 
   const modalContent = (
     <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-      
       <div className="absolute inset-0" onClick={onClose} />
 
       <div className="relative z-10 bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden text-slate-200">
@@ -561,7 +934,7 @@ const AIStockDetailModal: React.FC<ModalProps> = ({ title, items, loading, onClo
   return createPortal(modalContent, document.body);
 };
 
-// COMPONENT KARTU INDIVIDUAL SAHAM DENGAN KALKULASI R:R
+// COMPONENT KARTU INDIVIDUAL SAHAM
 const StockDetailCard: React.FC<{ item: AIAnalysisCacheItem }> = ({ item }) => {
   const plan = item.trading_plan;
   const isPending = item.result_status === 'PENDING';
@@ -658,7 +1031,7 @@ const StockDetailCard: React.FC<{ item: AIAnalysisCacheItem }> = ({ item }) => {
 
       </div>
 
-      {/* Keterangan Tambahan Menurut Status */}
+      {/* Keterangan Tambahan */}
       <div className="text-[11px] bg-slate-900/40 p-2 rounded-lg border border-slate-800/40 text-slate-300">
         {isPending ? (
           <div className="flex items-center space-x-1.5 text-amber-400/90">

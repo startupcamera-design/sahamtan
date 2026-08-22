@@ -29,6 +29,7 @@ export interface StockCandidate {
   dist_to_ma50_pct: number;
   volume: number;
   avg_volume_20: number;
+  supertrend_status?: 'green' | 'red' | null; // 👈 Ditambahkan field opsional supertrend
 }
 
 export interface TradingPlan {
@@ -443,7 +444,7 @@ function validateAndFixTradingPlan(
 async function callGeminiAPI(
   prompt: string,
   onProgress?: (status: string) => void
-): Promise<{ text: string; usedModel: string }> { // 👈 Diubah agar mengembalikan nama model
+): Promise<{ text: string; usedModel: string }> {
   let lastError = '';
 
   if (GEMINI_API_KEYS.length === 0) {
@@ -500,7 +501,7 @@ async function callGeminiAPI(
         const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) throw new Error(`Respons dari model ${model} kosong.`);
 
-        return { text, usedModel: model }; // 👈 Kembalikan teks beserta nama model yang berhasil
+        return { text, usedModel: model };
       } catch (err: any) {
         console.warn(`⚠️ Terjadi kesalahan pada [Model ${model}] - [Key ${keyLabel}]:`, err.message || err);
         lastError = err.message || err;
@@ -539,17 +540,17 @@ export async function analyzeStockWithAI(
         : null,
       analysisMarkdown: cachedData.analysis_text,
       fromCache: true,
-      usedModel: 'Supabase Cache', // 👈 Diberi tanda jika memuat dari cache
+      usedModel: 'Supabase Cache',
     };
   }
 
-  // UPDATE STATUS STATUS LOADING JIKA PROGRESS CALLBACK ADA
+  // UPDATE STATUS LOADING JIKA PROGRESS CALLBACK ADA
   if (onProgress) onProgress('Mengecek IHSG & Mengambil Data...');
 
   // 2. CEK KONDISI PASAR IHSG
   const ihsgInfo = await getIHSGMarketRegime(candidate.last_date);
 
-  // 3. AMBIL DATA RIWAYAT 75 HARI OHLCV (Naik dari 50 ke 75 agar kalkulasi MA50 20d lalu presisi)
+  // 3. AMBIL DATA RIWAYAT 75 HARI OHLCV
   const { data: history, error } = await supabase
     .from('daily_stock_prices')
     .select('date, open, high, low, close, volume')
@@ -746,8 +747,8 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
 6. **Catatan Peringatan Risiko / Red Flags** (Gunakan format Blockquote \`>\`)
   `;
 
-  // 6. EKSEKUSI PANGGILAN GEMINI API (DENGAN MENERUSKAN ONPROGRESS)
-  const { text: rawText, usedModel } = await callGeminiAPI(prompt, onProgress); // 👈 Menangkap result { text, usedModel }
+  // 6. EKSEKUSI PANGGILAN GEMINI API
+  const { text: rawText, usedModel } = await callGeminiAPI(prompt, onProgress);
 
   if (onProgress) onProgress('Memproses & Mengvalidasi Hasil...');
 
@@ -760,7 +761,6 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
 
   if (jsonMatch && jsonMatch[1]) {
     try {
-      // Pembersihan format markdown ```json jika diselipkan oleh AI
       const cleanJsonString = jsonMatch[1].replace(/```json|```/g, '').trim();
       const parsed = JSON.parse(cleanJsonString);
       score = parsed.score ?? score;
@@ -785,6 +785,9 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
   const cleanMarkdown = rawText.replace(/---JSON_SUMMARY---[\s\S]*?---END_JSON_SUMMARY---/, '').trim();
 
   // 9. SIMPAN HASIL KE SUPABASE CACHE
+  // Menyiapkan nilai supertrend_status (menggunakan 'green' | 'red' jika ada, atau null)
+  const supertrendStatusToSave = candidate.supertrend_status !== undefined ? candidate.supertrend_status : null;
+
   await supabase.from('ai_analysis_cache').upsert(
     {
       ticker: candidate.ticker,
@@ -793,6 +796,7 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
       action_recommendation: action,
       trading_plan: validatedTradingPlan,
       analysis_text: cleanMarkdown,
+      supertrend_status: supertrendStatusToSave, // 👈 Menyimpan status SuperTrend (green/red/null)
     },
     { onConflict: 'ticker,date' }
   );
@@ -803,14 +807,14 @@ Kemudian lanjutkan dengan Laporan Analisis Markdown profesional dengan struktur:
     tradingPlan: validatedTradingPlan,
     analysisMarkdown: cleanMarkdown,
     fromCache: false,
-    usedModel, // 👈 Meneruskan model AI yang merespons
+    usedModel,
   };
 }
 
 export async function fetchLatestAICaches(date: string) {
   const { data } = await supabase
     .from('ai_analysis_cache')
-    .select('ticker, ai_score, action_recommendation, trading_plan, analysis_text')
+    .select('ticker, ai_score, action_recommendation, trading_plan, analysis_text, supertrend_status')
     .eq('date', date);
 
   return data || [];
